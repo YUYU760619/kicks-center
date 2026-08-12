@@ -1,4 +1,9 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+
 export default function ProductPage() {
+    const router = useRouter();
   return (
     <main
       style={{
@@ -29,19 +34,20 @@ export default function ProductPage() {
       </p>
 
       <button
-        style={{
-          marginTop: "30px",
-          padding: "15px 40px",
-          background: "#ff7a00",
-          color: "white",
-          border: "none",
-          borderRadius: "10px",
-          fontSize: "18px",
-          cursor: "pointer",
-        }}
-      >
-        加入購物車
-      </button>
-    </main>
+  onClick={() => router.push("/cart")}
+  style={{
+    marginTop: "30px",
+    padding: "15px 40px",
+    background: "#ff7a00",
+    color: "white",
+    border: "none",
+    borderRadius: "10px",
+    fontSize: "18px",
+    cursor: "pointer",
+  }}
+>
+  加入購物車
+</button>
+</main>
   );
 }
