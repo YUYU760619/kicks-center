@@ -12,6 +12,7 @@ type Order = {
   email: string;
   address: string;
   total: number;
+  status: string;
 };
 
 export default function AdminPage() {
@@ -73,7 +74,26 @@ useEffect(() => {
 
   initAdmin();
 }, []);
+async function handleStatusChange(orderId: number, newStatus: string) {
+  const { error } = await supabase
+    .from("orders")
+    .update({ status: newStatus })
+    .eq("id", orderId);
 
+  if (error) {
+    console.error(error);
+    alert("更新訂單狀態失敗");
+    return;
+  }
+
+  setOrders((prev) =>
+    prev.map((order) =>
+      order.id === orderId
+        ? { ...order, status: newStatus }
+        : order
+    )
+  );
+}
     
     
 
@@ -159,6 +179,7 @@ return (
                 <th className="p-4">姓名</th>
                 <th className="p-4">電話</th>
                 <th className="p-4">金額</th>
+                <th className="p-4">狀態</th>
               </tr>
               
             </thead>
@@ -194,10 +215,23 @@ return (
 
                   <td className="p-4 font-bold">
                     NT$ {Number(order.total).toLocaleString()}
-                  </td>
+                  </td><td className="p-4">
+  <select
+    value={order.status}
+    onChange={(e) =>
+      handleStatusChange(order.id, e.target.value)
+    }
+    className="rounded-lg border border-white/20 bg-[#181818] px-3 py-2 text-white outline-none"
+  >
+    <option value="新訂單">新訂單</option>
+    <option value="已確認">已確認</option>
+    <option value="已出貨">已出貨</option>
+    <option value="已完成">已完成</option>
+  </select>
+</td>
                 </tr>{selectedOrder === order.id && (
   <tr className="border-t border-white/10 bg-[#151515]">
-    <td colSpan={5} className="p-5">
+    <td colSpan={6} className="p-5">
       <div className="grid gap-3 text-sm md:grid-cols-2">
         <p>
           <span className="text-zinc-400">Email：</span>
