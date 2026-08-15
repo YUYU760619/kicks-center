@@ -1,5 +1,6 @@
 "use client";
 import { useEffect, useState } from "react";
+import { supabase } from "../../lib/supabase";
 
 type CartItem = {
   name: string;
@@ -118,9 +119,8 @@ onChange={(e) =>
                 <span>總計</span>
                 <span>NT$ {total.toLocaleString()}</span>
               </div>
-
-              <button
-  onClick={() => {
+    <button
+  onClick={async () => {
     if (!form.name || !form.phone || !form.email || !form.address) {
       alert("請填寫完整收件資料");
       return;
@@ -128,16 +128,37 @@ onChange={(e) =>
 
     const orderNumber = "KC" + Date.now();
 
-localStorage.setItem("orderNumber", orderNumber);
-localStorage.removeItem("cart");
+    const { error } = await supabase
+      .from("orders")
+      .insert([
+        {
+          order_number: orderNumber,
+          name: form.name,
+          phone: form.phone,
+          email: form.email,
+          address: form.address,
+          items: cart,
+          total: total,
+        },
+      ]);
 
-window.location.href = "/success";
+    if (error) {
+      console.error(error);
+      alert("訂單送出失敗，請再試一次");
+      return;
+    }
+
+    localStorage.setItem("orderNumber", orderNumber);
+    localStorage.removeItem("cart");
+
+    window.location.href = "/success";
   }}
   className="mt-6 rounded-xl bg-[#D86F2D] px-8 py-4 font-bold"
 >
-                確認訂單
-              </button>
-            </div>
+  確認訂單
+</button>
+
+ </div>
           </section>
         </div>
       </div>

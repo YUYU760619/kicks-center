@@ -28,15 +28,15 @@ export default function SuccessPage() {
           <p className="mt-4 text-zinc-400">
             感謝您的訂購，我們已收到您的訂單。
           </p>
+{orderNumber && (
+  <div className="mt-8 rounded-xl bg-[#0d0d0d] p-5">
+    <p className="text-sm text-zinc-400">訂單編號</p>
+    <p className="mt-2 text-2xl font-bold">
+      {orderNumber}
+    </p>
+  </div>
+)}
 
-          {orderNumber && (
-            <div className="mt-8 rounded-xl bg-[#0d0d0d] p-5">
-              <p className="text-sm text-zinc-400">訂單編號</p>
-              <p className="mt-2 text-2xl font-bold">
-                {orderNumber}
-              </p>
-            </div>
-          )}
 
           <a
             href="/"
