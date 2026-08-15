@@ -126,7 +126,12 @@ onChange={(e) =>
       return;
     }
 
-    alert("訂單資料確認完成！");
+    const orderNumber = "KC" + Date.now();
+
+localStorage.setItem("orderNumber", orderNumber);
+localStorage.removeItem("cart");
+
+window.location.href = "/success";
   }}
   className="mt-6 rounded-xl bg-[#D86F2D] px-8 py-4 font-bold"
 >
