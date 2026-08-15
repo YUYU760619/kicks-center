@@ -133,9 +133,12 @@ const removeItem = (name: string) => {
                   總計：NT$ {total.toLocaleString()}
                 </p>
 
-                <button className="mt-4 rounded-xl bg-[#D86F2D] px-8 py-4 font-bold">
-                  前往結帳
-                </button>
+<a
+  href="/checkout"
+  className="mt-4 inline-block rounded-xl bg-[#D86F2D] px-8 py-4 font-bold"
+>
+  前往結帳
+</a>
               </div>
             </div>
           </>
