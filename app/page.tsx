@@ -1,4 +1,9 @@
+"use client";
+
+import { useRouter } from "next/navigation";
+
 const products = [
+  
   {
     brand: "NIKE",
     name: "Air Jordan 1 Low",
@@ -30,6 +35,7 @@ const products = [
 ];
 
 export default function Home() {
+   const router = useRouter();
   return (
     <main className="min-h-screen bg-[#0d0d0d] text-[#f8f8f8]">
       {/* Navbar */}
@@ -147,7 +153,11 @@ export default function Home() {
 
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
           {products.map((product) => (
-            <article key={product.name} className="group">
+            <article
+  key={product.name}
+  className="group cursor-pointer"
+  onClick={() => router.push("/product/air-jordan-1-low")}
+>
               <div className="relative aspect-[4/5] overflow-hidden rounded-2xl border border-white/10 bg-[#181818]">
                 <div className="absolute left-4 top-4 rounded-full bg-[#D86F2D] px-3 py-1 text-[10px] font-bold tracking-wider text-white">
                   {product.tag}
