@@ -3,7 +3,21 @@
 import { useRouter } from "next/navigation";
 
 export default function ProductPage() {
-    const router = useRouter();
+  const router = useRouter();
+
+  const handleAddToCart = () => {
+    const product = {
+      name: "Air Jordan 1 Low",
+      price: 4980,
+      image: "/shoe1.jpg",
+      qty: 1,
+    };
+
+    localStorage.setItem("cart", JSON.stringify([product]));
+
+    router.push("/cart");
+  };
+
   return (
     <main
       style={{
@@ -34,20 +48,20 @@ export default function ProductPage() {
       </p>
 
       <button
-  onClick={() => router.push("/cart")}
-  style={{
-    marginTop: "30px",
-    padding: "15px 40px",
-    background: "#ff7a00",
-    color: "white",
-    border: "none",
-    borderRadius: "10px",
-    fontSize: "18px",
-    cursor: "pointer",
-  }}
->
-  加入購物車
-</button>
-</main>
+        onClick={handleAddToCart}
+        style={{
+          marginTop: "30px",
+          padding: "15px 40px",
+          background: "#ff7a00",
+          color: "white",
+          border: "none",
+          borderRadius: "10px",
+          fontSize: "18px",
+          cursor: "pointer",
+        }}
+      >
+        加入購物車
+      </button>
+    </main>
   );
 }
