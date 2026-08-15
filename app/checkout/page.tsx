@@ -10,6 +10,12 @@ type CartItem = {
 
 export default function CheckoutPage() {
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [form, setForm] = useState({
+  name: "",
+  phone: "",
+  email: "",
+  address: "",
+});
 
   useEffect(() => {
     const savedCart = localStorage.getItem("cart");
@@ -37,26 +43,52 @@ export default function CheckoutPage() {
               <input
                 type="text"
                 placeholder="收件人姓名"
-                className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
-              />
+                 value={form.name}
+  onChange={(e) =>
+    setForm({
+      ...form,
+      name: e.target.value,
+    })
+  }
+  className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
+/>
 
               <input
                 type="tel"
                 placeholder="電話"
-                className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
-              />
+                value={form.phone}
+onChange={(e) =>
+  setForm({
+    ...form,
+    phone: e.target.value,
+  })
+}className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
+/>
 
               <input
                 type="email"
                 placeholder="Email"
-                className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
-              />
-
-              <input
-                type="text"
-                placeholder="收件地址"
-                className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
-              />
+                value={form.email}
+onChange={(e) =>
+  setForm({
+    ...form,
+    email: e.target.value,
+  })
+} className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
+/>
+<input
+  type="text"
+  placeholder="收件地址"
+  value={form.address}
+  onChange={(e) =>
+    setForm({
+      ...form,
+      address: e.target.value,
+    })
+  }
+  className="rounded-xl border border-white/10 bg-[#0d0d0d] px-4 py-3 outline-none"
+/>
+   
             </div>
           </section>
 
@@ -87,7 +119,17 @@ export default function CheckoutPage() {
                 <span>NT$ {total.toLocaleString()}</span>
               </div>
 
-              <button className="mt-6 rounded-xl bg-[#D86F2D] px-8 py-4 font-bold">
+              <button
+  onClick={() => {
+    if (!form.name || !form.phone || !form.email || !form.address) {
+      alert("請填寫完整收件資料");
+      return;
+    }
+
+    alert("訂單資料確認完成！");
+  }}
+  className="mt-6 rounded-xl bg-[#D86F2D] px-8 py-4 font-bold"
+>
                 確認訂單
               </button>
             </div>
