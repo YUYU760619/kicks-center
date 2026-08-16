@@ -152,9 +152,9 @@ export default function Home() {
         </div>
 
         <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
-          {products.map((product) => (
+          {products.map((product, index) => (
             <article
-  key={product.name}
+ key={`${product.name}-${index}`}
   className="group cursor-pointer"
   onClick={() => router.push("/product/air-jordan-1-low")}
 >

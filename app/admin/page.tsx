@@ -22,7 +22,20 @@ export default function AdminPage() {
 const [password, setPassword] = useState("");
 const [loggedIn, setLoggedIn] = useState(false);
 const [selectedOrder, setSelectedOrder] = useState<number | null>(null);
+const [searchTerm, setSearchTerm] = useState("");
+const [statusFilter, setStatusFilter] = useState("全部");
 
+    const filteredOrders = orders.filter((order) => {
+  const matchesSearch =
+    order.order_number.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    order.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    order.phone.includes(searchTerm);
+
+  const matchesStatus =
+    statusFilter === "全部" || order.status === statusFilter;
+
+  return matchesSearch && matchesStatus;
+});
  async function handleLogin() {
   const { error } = await supabase.auth.signInWithPassword({
     email,
@@ -164,7 +177,27 @@ return (
     登出
   </button>
 </div>
+<div className="mt-6 flex flex-col gap-3 sm:flex-row">
+  <input
+    type="text"
+    placeholder="搜尋訂單編號、姓名、電話..."
+    value={searchTerm}
+    onChange={(e) => setSearchTerm(e.target.value)}
+    className="flex-1 rounded-xl border border-white/20 bg-[#181818] px-4 py-3 text-white outline-none"
+  />
 
+  <select
+    value={statusFilter}
+    onChange={(e) => setStatusFilter(e.target.value)}
+    className="rounded-xl border border-white/20 bg-[#181818] px-4 py-3 text-white outline-none"
+  >
+    <option value="全部">全部狀態</option>
+    <option value="新訂單">新訂單</option>
+    <option value="已確認">已確認</option>
+    <option value="已出貨">已出貨</option>
+    <option value="已完成">已完成</option>
+  </select>
+</div>
       {loading ? (
         <p className="mt-10 text-zinc-400">
           讀取訂單中...
@@ -185,7 +218,7 @@ return (
             </thead>
 
             <tbody>
-              {orders.map((order) => (
+              {filteredOrders.map((order) => (
   <>
                 <tr
     key={order.id}
