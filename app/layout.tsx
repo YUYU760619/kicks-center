@@ -1,7 +1,6 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { IdleCat } from './idle-cat';
-import { AuthGate } from './auth-gate';
 
 export const metadata: Metadata = {
   title: 'KICKS CENTER · POS System',
@@ -16,10 +15,8 @@ export default function RootLayout({
   return (
     <html lang="zh-Hant">
       <body>
-        <AuthGate>
-          {children}
-          <IdleCat />
-        </AuthGate>
+        {children}
+        <IdleCat />
       </body>
     </html>
   );

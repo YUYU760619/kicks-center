@@ -1,7 +1,8 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { loadPosStore, savePosStore, type SyncSource } from "@/lib/pos-store";
+import { loadPosStore, PosStoreConflictError, savePosStore } from "@/lib/pos-store";
+import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { supabase } from "@/lib/supabase";
 
 export type Status = "在庫" | "已售出" | "已銷帳" | "已取回" | "已下架" | "已調度";
@@ -458,12 +459,15 @@ type Ctx = {
 export function PosApp() {
   const [store, setStore] = useState(initial);
   const [ready, setReady] = useState(false);
-  const [syncSource, setSyncSource] = useState<SyncSource>("local");
   const [syncing, setSyncing] = useState(false);
+  const [loadError, setLoadError] = useState("");
   const [page, setPage] = useState<Page>("dashboard");
   const [mobile, setMobile] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [toast, setToast] = useState("");
+  const versionRef = useRef<string | null>(null);
+  const lastSavedRef = useRef("");
+  const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get(
       "page",
@@ -471,20 +475,42 @@ export function PosApp() {
     if (requested && nav.some(([id]) => id === requested)) {
       window.setTimeout(() => setPage(requested), 0);
     }
-    loadPosStore(initial).then(({ store: loadedStore, source }) => {
-      setStore(loadedStore);
-      setSyncSource(source);
-      setReady(true);
-    });
+    loadPosStore()
+      .then(({ store: loadedStore, updatedAt }) => {
+        versionRef.current = updatedAt;
+        lastSavedRef.current = JSON.stringify(loadedStore);
+        setStore(loadedStore);
+        setReady(true);
+      })
+      .catch(() => setLoadError("雲端資料載入失敗，為避免覆蓋正式資料，系統已停止操作。"));
   }, []);
   useEffect(() => {
     if (!ready) return;
+    const serialized = JSON.stringify(store);
+    if (serialized === lastSavedRef.current) return;
+    const snapshot = store;
     const timer = window.setTimeout(() => {
       setSyncing(true);
-      savePosStore(store).then((source) => {
-        setSyncSource(source);
-        setSyncing(false);
-      });
+      saveQueueRef.current = saveQueueRef.current
+        .then(async () => {
+          if (serialized === lastSavedRef.current) return;
+          if (!versionRef.current) throw new Error("Missing cloud version");
+          const result = await savePosStore(snapshot, versionRef.current);
+          versionRef.current = result.updatedAt;
+          lastSavedRef.current = serialized;
+        })
+        .catch(async (saveError) => {
+          if (saveError instanceof PosStoreConflictError) {
+            const latest = await loadPosStore();
+            versionRef.current = latest.updatedAt;
+            lastSavedRef.current = JSON.stringify(latest.store);
+            setStore(latest.store);
+            setToast("資料已由其他工作站更新，畫面已重新載入以避免覆蓋");
+            return;
+          }
+          setToast("雲端儲存失敗；本次變更尚未寫入，請重新整理後再試");
+        })
+        .finally(() => setSyncing(false));
     }, 450);
     return () => window.clearTimeout(timer);
   }, [store, ready]);
@@ -539,8 +565,8 @@ export function PosApp() {
         </nav>
         <div className="absolute bottom-5 left-5 right-5 rounded-xl border border-[#292c32] bg-[#15171b] p-3">
           <div className="text-xs font-bold">正式營運環境</div>
-          <div className={`mt-1 text-[10px] ${syncSource === "cloud" ? "text-emerald-400" : "text-amber-400"}`}>
-            ● {syncing ? "資料同步中…" : syncSource === "cloud" ? "Supabase 雲端已同步" : "離線模式 · 本機已備份"}
+          <div className="mt-1 text-[10px] text-emerald-400">
+            ● {syncing ? "安全寫入雲端中…" : "Supabase 雲端已同步"}
           </div>
         </div>
       </aside>
@@ -581,7 +607,7 @@ export function PosApp() {
         </header>
         <div className="mx-auto max-w-[1500px] p-4 sm:p-7">
           {!ready ? (
-            <Empty text="載入資料中…" />
+            <Empty text={loadError || "載入資料中…"} />
           ) : page === "dashboard" ? (
             <Dashboard {...c} />
           ) : page === "inventory" ? (
@@ -1766,7 +1792,7 @@ function Settings({
             </div>
             <div className="flex justify-between">
               <span>資料儲存</span>
-              <b className="text-emerald-400">Supabase + 本機備援</b>
+              <b className="text-emerald-400">Supabase 權限保護雲端</b>
             </div>
             <div className="flex justify-between">
               <span>商品 / 銷售</span>
@@ -1797,16 +1823,116 @@ function Settings({
           <Btn
             onClick={async () => {
               if (!supabase) {
-                notify("本機開發模式不需要登入");
+                notify("系統安全設定缺失，無法執行登入操作");
                 return;
               }
+              clearSensitiveBrowserState();
               await supabase.auth.signOut();
             }}
           >
             登出系統
           </Btn>
         </div>
+        <MemberAccessCard vendors={store.vendors} notify={notify} />
       </div>
     </>
+  );
+}
+
+function MemberAccessCard({
+  vendors,
+  notify,
+}: {
+  vendors: Vendor[];
+  notify: (message: string) => void;
+}) {
+  const [currentRole, setCurrentRole] = useState<string | null>(null);
+  const [email, setEmail] = useState("");
+  const [role, setRole] = useState<"admin" | "staff" | "vendor">("vendor");
+  const [vendorId, setVendorId] = useState(vendors[0]?.id || "");
+  const [active, setActive] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    let mounted = true;
+    async function loadRole() {
+      if (!supabase) return;
+      const { data: userData } = await supabase.auth.getUser();
+      if (!userData.user) return;
+      const { data } = await supabase
+        .from("kc_app_members")
+        .select("role")
+        .eq("user_id", userData.user.id)
+        .maybeSingle();
+      if (mounted) setCurrentRole(typeof data?.role === "string" ? data.role : "");
+    }
+    void loadRole();
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  async function saveMember(event: FormEvent) {
+    event.preventDefault();
+    if (!supabase || currentRole !== "admin") return;
+    setSaving(true);
+    const { error } = await supabase.rpc("kc_admin_set_member_access", {
+      p_email: email.trim(),
+      p_role: role,
+      p_vendor_id: role === "vendor" ? vendorId : null,
+      p_active: active,
+    });
+    setSaving(false);
+    if (error) {
+      notify(error.message.includes("Invite or create")
+        ? "請先在 Supabase Authentication 邀請或建立此 Email 帳號"
+        : `帳號權限更新失敗：${error.message}`);
+      return;
+    }
+    notify("帳號權限已更新，並留下稽核紀錄");
+    setEmail("");
+  }
+
+  return (
+    <div className="kc-card p-6 md:col-span-2 xl:col-span-3">
+      <b className="text-sm">員工／供應商帳號權限</b>
+      {currentRole === null ? (
+        <p className="mt-4 text-xs text-zinc-500">正在確認管理權限…</p>
+      ) : currentRole !== "admin" ? (
+        <p className="mt-4 text-xs leading-6 text-zinc-500">只有管理員可以綁定帳號角色；員工帳號無法自行提高權限。</p>
+      ) : (
+        <>
+          <p className="mt-3 text-xs leading-6 text-zinc-500">
+            請先在 Supabase Authentication 邀請帳號，再於此處綁定角色。供應商帳號只會看到綁定廠商的唯讀資料。
+          </p>
+          <form onSubmit={saveMember} className="mt-5 grid gap-3 md:grid-cols-2 xl:grid-cols-[2fr_1fr_1.5fr_auto_auto] xl:items-end">
+            <label className="text-[10px] font-bold text-zinc-500">
+              帳號 EMAIL
+              <input className="kc-input mt-2" type="email" required value={email} onChange={(event) => setEmail(event.target.value)} placeholder="vendor@example.com" />
+            </label>
+            <label className="text-[10px] font-bold text-zinc-500">
+              角色
+              <select className="kc-input mt-2" value={role} onChange={(event) => setRole(event.target.value as typeof role)}>
+                <option value="vendor">供應商</option>
+                <option value="staff">員工</option>
+                <option value="admin">管理員</option>
+              </select>
+            </label>
+            {role === "vendor" ? (
+              <label className="text-[10px] font-bold text-zinc-500">
+                綁定寄賣廠商
+                <select className="kc-input mt-2" value={vendorId} onChange={(event) => setVendorId(event.target.value)} required>
+                  {vendors.map((vendor) => <option key={vendor.id} value={vendor.id}>{vendor.code} · {vendor.name}</option>)}
+                </select>
+              </label>
+            ) : <div />}
+            <label className="flex min-h-11 items-center gap-2 text-xs font-bold text-zinc-400">
+              <input type="checkbox" checked={active} onChange={(event) => setActive(event.target.checked)} /> 啟用
+            </label>
+            <Btn type="submit" disabled={saving}>{saving ? "儲存中…" : "儲存權限"}</Btn>
+          </form>
+        </>
+      )}
+    </div>
   );
 }

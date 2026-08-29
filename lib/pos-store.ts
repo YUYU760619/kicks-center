@@ -1,72 +1,72 @@
 import type { Store } from "@/app/pos-app";
+import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { supabase } from "@/lib/supabase";
 
-export const POS_STORAGE_KEY = "kicks-center-pos-v1";
 const POS_STATE_ID = "main";
 
-export type SyncSource = "cloud" | "local";
+export type SyncSource = "cloud";
 
-function readLocalStore(fallback: Store): Store {
-  try {
-    const saved = window.localStorage.getItem(POS_STORAGE_KEY);
-    return saved ? (JSON.parse(saved) as Store) : fallback;
-  } catch {
-    return fallback;
+export class PosStoreConflictError extends Error {
+  constructor() {
+    super("POS data changed in another session");
+    this.name = "PosStoreConflictError";
   }
 }
 
-export async function loadPosStore(fallback: Store): Promise<{
+export async function loadPosStore(): Promise<{
   store: Store;
   source: SyncSource;
+  updatedAt: string;
 }> {
-  const localStore = readLocalStore(fallback);
-  if (!supabase) return { store: localStore, source: "local" };
+  clearSensitiveBrowserState();
+  if (!supabase) throw new Error("Supabase is not configured");
 
   const { data, error } = await supabase
     .from("kc_pos_state")
-    .select("payload")
+    .select("payload, updated_at")
     .eq("id", POS_STATE_ID)
-    .maybeSingle();
+    .single();
 
-  if (error) {
+  if (error || !data?.payload || !data.updated_at) {
     console.error("Unable to load KICKS CENTER cloud state", error);
-    return { store: localStore, source: "local" };
+    throw new Error("Unable to load KICKS CENTER cloud state");
   }
 
-  if (data?.payload) {
-    const cloudStore = data.payload as Store;
-    window.localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(cloudStore));
-    return { store: cloudStore, source: "cloud" };
-  }
-
-  const { error: seedError } = await supabase.from("kc_pos_state").upsert({
-    id: POS_STATE_ID,
-    payload: localStore,
-    updated_at: new Date().toISOString(),
-  });
-
-  if (seedError) {
-    console.error("Unable to initialize KICKS CENTER cloud state", seedError);
-    return { store: localStore, source: "local" };
-  }
-
-  return { store: localStore, source: "cloud" };
+  return {
+    store: data.payload as Store,
+    source: "cloud",
+    updatedAt: String(data.updated_at),
+  };
 }
 
-export async function savePosStore(store: Store): Promise<SyncSource> {
-  window.localStorage.setItem(POS_STORAGE_KEY, JSON.stringify(store));
-  if (!supabase) return "local";
+export async function savePosStore(
+  store: Store,
+  expectedUpdatedAt: string,
+  actionSummary = "POS 主資料更新",
+): Promise<{ source: SyncSource; updatedAt: string }> {
+  if (!supabase) throw new Error("Supabase is not configured");
 
-  const { error } = await supabase.from("kc_pos_state").upsert({
-    id: POS_STATE_ID,
-    payload: store,
-    updated_at: new Date().toISOString(),
-  });
+  const { data, error } = await supabase
+    .rpc("kc_staff_save_pos_state", {
+      p_payload: store,
+      p_expected_updated_at: expectedUpdatedAt,
+      p_action_summary: actionSummary,
+    })
+    .single();
 
   if (error) {
     console.error("Unable to save KICKS CENTER cloud state", error);
-    return "local";
+    if (error.code === "40001" || error.message.includes("reload required")) {
+      throw new PosStoreConflictError();
+    }
+    throw new Error("Unable to save KICKS CENTER cloud state");
   }
 
-  return "cloud";
+  const updatedAt = (data as { updated_at?: string } | null)?.updated_at;
+  if (!updatedAt) throw new Error("Cloud save did not return a version");
+  return { source: "cloud", updatedAt };
+}
+
+export function clearPosStoreFromDevice() {
+  clearSensitiveBrowserState();
 }

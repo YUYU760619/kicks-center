@@ -29,15 +29,18 @@ const statusStyle: Record<Status, string> = {
 export function VendorDetailPage({ vendorId }: { vendorId: string }) {
   const [store, setStore] = useState<Store>(emptyStore);
   const [ready, setReady] = useState(false);
+  const [loadError, setLoadError] = useState('');
   const [tab, setTab] = useState('全部');
   const [query, setQuery] = useState('');
   const [selected, setSelected] = useState<Product | null>(null);
 
   useEffect(() => {
-    loadPosStore(emptyStore).then(({ store: loadedStore }) => {
-      setStore(loadedStore);
-      setReady(true);
-    });
+    loadPosStore()
+      .then(({ store: loadedStore }) => {
+        setStore(loadedStore);
+        setReady(true);
+      })
+      .catch(() => setLoadError('無法驗證或載入廠商資料'));
   }, []);
 
   const storedVendor = store.vendors.find((vendor) => vendor.id === vendorId);
@@ -57,7 +60,7 @@ export function VendorDetailPage({ vendorId }: { vendorId: string }) {
   });
   const unsettled = sales.filter((sale) => !sale.settled);
 
-  if (!ready) return <div className="grid min-h-screen place-items-center bg-[#090a0c] text-sm text-zinc-500">載入廠商資料中…</div>;
+  if (!ready) return <div className="grid min-h-screen place-items-center bg-[#090a0c] text-sm text-zinc-500">{loadError || '載入廠商資料中…'}</div>;
   if (!vendor) return <div className="grid min-h-screen place-items-center bg-[#090a0c] text-center"><div><b>找不到這位寄賣廠商</b><br/><Link href="/?page=vendors" className="mt-4 inline-block text-sm text-orange-400">返回廠商列表</Link></div></div>;
 
   return <div className="min-h-screen bg-[#090a0c]">
