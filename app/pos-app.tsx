@@ -1,68 +1,30 @@
 "use client";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { loadPosStore, PosStoreConflictError, savePosStore } from "@/lib/pos-store";
+import {
+  createInventoryItem,
+  loadPosStore,
+  PosStoreConflictError,
+  savePosStore,
+  sellInventoryItem,
+} from "@/lib/pos-store";
+import {
+  createInventoryInStore,
+  normalizeScanCode,
+  sellInventoryInStore,
+  type InventoryInput,
+  type Log,
+  type Product,
+  type Sale,
+  type Settlement,
+  type Status,
+  type Store,
+  type Vendor,
+} from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { supabase } from "@/lib/supabase";
 
-export type Status = "在庫" | "已售出" | "已銷帳" | "已取回" | "已下架" | "已調度";
-export type Vendor = {
-  id: string;
-  code: string;
-  name: string;
-  phone: string;
-  joined: string;
-};
-type Log = { at: string; action: string; note: string };
-export type Product = {
-  id: string;
-  code: string;
-  category: string;
-  name: string;
-  brand: string;
-  model: string;
-  usSize: string;
-  cmSize: string;
-  color: string;
-  cost: number;
-  price: number;
-  vendorId: string;
-  location: string;
-  consignmentStart: string;
-  consignmentEnd: string;
-  packaging: string;
-  note: string;
-  status: Status;
-  createdAt: string;
-  history: Log[];
-};
-export type Sale = {
-  id: string;
-  productId: string;
-  soldAt: string;
-  price: number;
-  cost: number;
-  profit: number;
-  payment: string;
-  discount: number;
-  settled: boolean;
-  settlementId?: string;
-};
-type Settlement = {
-  id: string;
-  vendorId: string;
-  saleIds: string[];
-  totalSales: number;
-  payout: number;
-  profit: number;
-  completedAt: string;
-};
-export type Store = {
-  products: Product[];
-  vendors: Vendor[];
-  sales: Sale[];
-  settlements: Settlement[];
-};
+export type { Product, Sale, Status, Store, Vendor } from "@/lib/pos-core";
 const vendors: Vendor[] = [
   {
     id: "v1",
@@ -358,6 +320,14 @@ const initial: Store = {
   vendors,
   sales: [
     {
+      sale_id: "sale-demo",
+      inventory_id: "p17",
+      sold_at: "2026-08-28T10:18:00.000Z",
+      sold_price: 7680,
+      return_price: 5900,
+      vendor_id: "v2",
+      payment_method: "信用卡",
+      settlement_status: "pending",
       id: "sale-demo",
       productId: "p17",
       soldAt: "2026-08-28T10:18:00.000Z",
@@ -387,9 +357,13 @@ const initial: Store = {
         action: "商品取回",
         note: "寄賣人取回",
       });
+    const inventoryId = `p${i + 1}`;
+    const scanCode = normalizeScanCode(r[0]);
     return {
-      id: `p${i + 1}`,
-      code: r[0],
+      inventory_id: inventoryId,
+      scan_code: scanCode,
+      id: inventoryId,
+      code: scanCode,
       category: r[1],
       name: r[2],
       brand: r[3],
@@ -412,6 +386,7 @@ const initial: Store = {
   }),
 };
 const money = (n: number) => `NT$ ${Math.round(n).toLocaleString("zh-TW")}`;
+const shortSystemId = (value: string) => value.replace(/-/g, "").slice(-10).toUpperCase();
 const fmt = (s: string, t = false) =>
   new Intl.DateTimeFormat(
     "zh-TW",
@@ -421,12 +396,12 @@ const fmt = (s: string, t = false) =>
   ).format(new Date(s));
 const now = () => new Date().toISOString();
 const styles: Record<Status, string> = {
-  在庫: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-  已售出: "bg-orange-500/10 text-orange-400 border-orange-500/20",
-  已銷帳: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-  已取回: "bg-zinc-500/10 text-zinc-400 border-zinc-500/20",
-  已下架: "bg-red-500/10 text-red-400 border-red-500/20",
-  已調度: "bg-violet-500/10 text-violet-400 border-violet-500/20",
+  在庫: "bg-[#5daa83]/10 text-[#74bb96] border-[#5daa83]/25",
+  已售出: "bg-[#d9a441]/10 text-[#e0b85f] border-[#d9a441]/25",
+  已銷帳: "bg-[#6f91c9]/10 text-[#8ca8d5] border-[#6f91c9]/25",
+  已取回: "bg-[#98a2ad]/10 text-[#aeb6bf] border-[#98a2ad]/25",
+  已下架: "bg-[#d96c6c]/10 text-[#e28a8a] border-[#d96c6c]/25",
+  已調度: "bg-[#9b86bd]/10 text-[#b09bcf] border-[#9b86bd]/25",
 };
 const Pill = ({ s }: { s: Status }) => (
   <span
@@ -449,6 +424,13 @@ type Page = (typeof nav)[number][0];
 type Ctx = {
   store: Store;
   setStore: React.Dispatch<React.SetStateAction<Store>>;
+  createInventory: (input: InventoryInput) => Promise<Product>;
+  completeSale: (input: {
+    inventory_id: string;
+    sold_price: number;
+    payment_method: string;
+    discount: number;
+  }) => Promise<Sale>;
   go: (p: Page) => void;
   notify: (m: string) => void;
   vendor: (id: string) => Vendor | undefined;
@@ -456,19 +438,27 @@ type Ctx = {
   setSelected: (s: string | null) => void;
 };
 
-export function PosApp() {
+export function PosApp({
+  preview = false,
+  initialPage = "dashboard",
+}: {
+  preview?: boolean;
+  initialPage?: Page;
+} = {}) {
   const [store, setStore] = useState(initial);
-  const [ready, setReady] = useState(false);
+  const [ready, setReady] = useState(preview);
   const [syncing, setSyncing] = useState(false);
   const [loadError, setLoadError] = useState("");
-  const [page, setPage] = useState<Page>("dashboard");
+  const [page, setPage] = useState<Page>(initialPage);
   const [mobile, setMobile] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [toast, setToast] = useState("");
   const versionRef = useRef<string | null>(null);
   const lastSavedRef = useRef("");
   const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const coreMutationLockRef = useRef(false);
   useEffect(() => {
+    if (preview) return;
     const requested = new URLSearchParams(window.location.search).get(
       "page",
     ) as Page | null;
@@ -483,9 +473,9 @@ export function PosApp() {
         setReady(true);
       })
       .catch(() => setLoadError("雲端資料載入失敗，為避免覆蓋正式資料，系統已停止操作。"));
-  }, []);
+  }, [preview]);
   useEffect(() => {
-    if (!ready) return;
+    if (preview || !ready) return;
     const serialized = JSON.stringify(store);
     if (serialized === lastSavedRef.current) return;
     const snapshot = store;
@@ -513,7 +503,7 @@ export function PosApp() {
         .finally(() => setSyncing(false));
     }, 450);
     return () => window.clearTimeout(timer);
-  }, [store, ready]);
+  }, [store, ready, preview]);
   const go = (p: Page) => {
     setPage(p);
     setSelected(null);
@@ -524,22 +514,108 @@ export function PosApp() {
     setToast(m);
     setTimeout(() => setToast(""), 2600);
   };
+  const prepareCoreMutation = async () => {
+    await saveQueueRef.current;
+    if (!versionRef.current) throw new Error("Missing cloud version");
+    const serialized = JSON.stringify(store);
+    if (serialized !== lastSavedRef.current) {
+      const saved = await savePosStore(store, versionRef.current, "核心流程前同步");
+      versionRef.current = saved.updatedAt;
+      lastSavedRef.current = serialized;
+    }
+    return versionRef.current;
+  };
+  const applyCloudMutation = (nextStore: Store, updatedAt: string) => {
+    versionRef.current = updatedAt;
+    lastSavedRef.current = JSON.stringify(nextStore);
+    setStore(nextStore);
+  };
+  const recoverCoreMutation = async (error: unknown) => {
+    if (!preview && error instanceof PosStoreConflictError) {
+      const latest = await loadPosStore();
+      applyCloudMutation(latest.store, latest.updatedAt);
+    }
+    throw error;
+  };
+  const createInventory = async (input: InventoryInput) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        const result = createInventoryInStore(store, input, crypto.randomUUID(), now());
+        setStore(result.store);
+        return result.product;
+      }
+      const expectedUpdatedAt = await prepareCoreMutation();
+      const result = await createInventoryItem(input, expectedUpdatedAt);
+      applyCloudMutation(result.store, result.updatedAt);
+      const product = result.store.products.find(
+        (item) => item.inventory_id === result.inventoryId,
+      );
+      if (!product) throw new Error("CREATED_INVENTORY_NOT_FOUND");
+      return product;
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
+  const completeSale = async (input: {
+    inventory_id: string;
+    sold_price: number;
+    payment_method: string;
+    discount: number;
+  }) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        const result = sellInventoryInStore(store, input, crypto.randomUUID(), now());
+        setStore(result.store);
+        return result.sale;
+      }
+      const expectedUpdatedAt = await prepareCoreMutation();
+      const result = await sellInventoryItem(input, expectedUpdatedAt);
+      applyCloudMutation(result.store, result.updatedAt);
+      const sale = result.store.sales.find((item) => item.sale_id === result.saleId);
+      if (!sale) throw new Error("CREATED_SALE_NOT_FOUND");
+      return sale;
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
   const vendor = (id: string) => store.vendors.find((v) => v.id === id);
-  const c = { store, setStore, go, notify, vendor, selected, setSelected };
+  const c = {
+    store,
+    setStore,
+    createInventory,
+    completeSale,
+    go,
+    notify,
+    vendor,
+    selected,
+    setSelected,
+  };
   return (
-    <div className="min-h-screen bg-[#090a0c]">
+    <div className="min-h-screen bg-[#11151a]">
       <aside
-        className={`fixed inset-y-0 left-0 z-40 w-[246px] border-r border-[#25282e] bg-[#0d0f12] p-5 transition-transform lg:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}
+        className={`${page === "pos" ? "hidden" : "fixed"} inset-y-0 left-0 z-40 w-[246px] border-r border-[#29323c] bg-[#171c22] p-5 transition-transform lg:translate-x-0 ${mobile ? "translate-x-0" : "-translate-x-full"}`}
       >
         <div className="mb-8 flex h-14 items-center gap-3 px-2">
-          <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#ff641e] font-black text-black">
+          <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#e8893a] font-black text-[#17120e]">
             KC
           </div>
           <div>
             <div className="text-[15px] font-black tracking-[.08em]">
               KICKS CENTER
             </div>
-            <div className="mt-1 text-[9px] font-bold tracking-[.24em] text-[#ff641e]">
+            <div className="mt-1 text-[9px] font-bold tracking-[.24em] text-[#e8893a]">
               POS SYSTEM
             </div>
           </div>
@@ -549,63 +625,83 @@ export function PosApp() {
             <button
               key={id}
               onClick={() => go(id)}
-              className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[13px] font-semibold ${page === id ? "bg-[#ff641e] text-black" : "text-zinc-400 hover:bg-white/5 hover:text-white"}`}
+              className={`flex w-full items-center gap-3 rounded-xl px-3 py-3 text-left text-[13px] font-semibold ${page === id ? "bg-[#e8893a] text-[#17120e]" : "text-[#98a2ad] hover:bg-white/5 hover:text-white"}`}
             >
               <span className="w-5 text-center text-lg">{icon}</span>
               {label}
-              {id === "settlement" && store.sales.some((s) => !s.settled) && (
+              {id === "settlement" && store.sales.some((s) => s.settlement_status === "pending") && (
                 <b
                   className={`ml-auto rounded-full px-2 py-0.5 text-[10px] ${page === id ? "bg-black text-white" : "bg-orange-500/15 text-orange-400"}`}
                 >
-                  {store.sales.filter((s) => !s.settled).length}
+                  {store.sales.filter((s) => s.settlement_status === "pending").length}
                 </b>
               )}
             </button>
           ))}
         </nav>
-        <div className="absolute bottom-5 left-5 right-5 rounded-xl border border-[#292c32] bg-[#15171b] p-3">
-          <div className="text-xs font-bold">正式營運環境</div>
-          <div className="mt-1 text-[10px] text-emerald-400">
-            ● {syncing ? "安全寫入雲端中…" : "Supabase 雲端已同步"}
+        <div className="absolute bottom-5 left-5 right-5 rounded-xl border border-[#303944] bg-[#222a33] p-3">
+          <div className="text-xs font-bold">{preview ? "配色測試環境" : "正式營運環境"}</div>
+          <div className="mt-1 text-[10px] text-[#74bb96]">
+            ● {preview ? "操作不會儲存" : syncing ? "安全寫入雲端中…" : "Supabase 雲端已同步"}
           </div>
         </div>
       </aside>
-      {mobile && (
+      {mobile && page !== "pos" && (
         <button
           aria-label="關閉選單"
           className="fixed inset-0 z-30 bg-black/70 lg:hidden"
           onClick={() => setMobile(false)}
         />
       )}
-      <main className="min-h-screen lg:pl-[246px]">
-        <header className="sticky top-0 z-20 flex h-[68px] items-center justify-between border-b border-[#25282e] bg-[#090a0c]/90 px-4 backdrop-blur-xl sm:px-7">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setMobile(true)}
-              className="rounded-lg border border-[#30343b] p-2 lg:hidden"
-            >
-              ☰
-            </button>
-            <div>
-              <div className="text-[10px] uppercase tracking-[.16em] text-zinc-600">
-                Operations / {nav.find((n) => n[0] === page)?.[1]}
+      <main className={`min-h-screen ${page === "pos" ? "" : "lg:pl-[246px]"}`}>
+        {page === "pos" ? (
+          <header className="sticky top-0 z-20 flex h-[72px] items-center justify-between border-b border-[#29323c] bg-[#11151a]/95 px-4 backdrop-blur-xl sm:px-8">
+            <div className="flex items-center gap-3">
+              <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#e8893a] font-black text-[#17120e]">
+                KC
               </div>
-              <div className="text-sm font-bold">
-                {nav.find((n) => n[0] === page)?.[1]}
+              <div>
+                <div className="text-sm font-black tracking-[.08em]">KICKS CENTER</div>
+                <div className="mt-1 text-[9px] font-bold tracking-[.22em] text-[#e8893a]">POS 收銀系統</div>
               </div>
             </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <div className="hidden text-right sm:block">
-              <div className="text-xs font-semibold">KICKS CENTER 店員</div>
-              <div className="text-[10px] text-emerald-400">● 系統正常</div>
+            <div className="text-right">
+              <div className="text-xs font-bold">收銀台</div>
+              <div className="mt-1 text-[10px] text-[#74bb96]">
+                ● {preview ? "測試模式" : syncing ? "交易同步中…" : "系統連線正常"}
+              </div>
             </div>
-            <div className="grid h-9 w-9 place-items-center rounded-full bg-zinc-800 text-xs font-bold">
-              KC
+          </header>
+        ) : (
+          <header className="sticky top-0 z-20 flex h-[68px] items-center justify-between border-b border-[#29323c] bg-[#11151a]/90 px-4 backdrop-blur-xl sm:px-7">
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setMobile(true)}
+                className="rounded-lg border border-[#3a4552] p-2 lg:hidden"
+              >
+                ☰
+              </button>
+              <div>
+                <div className="text-[10px] uppercase tracking-[.16em] text-zinc-600">
+                  Operations / {nav.find((n) => n[0] === page)?.[1]}
+                </div>
+                <div className="text-sm font-bold">
+                  {nav.find((n) => n[0] === page)?.[1]}
+                </div>
+              </div>
             </div>
-          </div>
-        </header>
-        <div className="mx-auto max-w-[1500px] p-4 sm:p-7">
+            <div className="flex items-center gap-3">
+              <div className="hidden text-right sm:block">
+                <div className="text-xs font-semibold">KICKS CENTER 店員</div>
+                <div className="text-[10px] text-emerald-400">● 系統正常</div>
+              </div>
+              <div className="grid h-9 w-9 place-items-center rounded-full bg-zinc-800 text-xs font-bold">
+                KC
+              </div>
+            </div>
+          </header>
+        )}
+        <div className={`mx-auto p-4 sm:p-7 ${page === "pos" ? "max-w-[1280px]" : "max-w-[1500px]"}`}>
           {!ready ? (
             <Empty text={loadError || "載入資料中…"} />
           ) : page === "dashboard" ? (
@@ -628,7 +724,7 @@ export function PosApp() {
         </div>
       </main>
       {toast && (
-        <div className="fixed bottom-6 right-6 z-50 rounded-xl border border-emerald-500/30 bg-[#14241b] px-5 py-3 text-sm font-bold text-emerald-300 shadow-2xl">
+        <div className="fixed bottom-6 right-6 z-50 rounded-xl border border-[#5daa83]/40 bg-[#193027] px-5 py-3 text-sm font-bold text-[#8ec9aa] shadow-2xl">
           ✓ {toast}
         </div>
       )}
@@ -648,7 +744,7 @@ const Heading = ({
 }) => (
   <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
     <div>
-      <div className="mb-2 text-[10px] font-bold uppercase tracking-[.2em] text-[#ff641e]">
+      <div className="mb-2 text-[10px] font-bold uppercase tracking-[.2em] text-[#e8893a]">
         {eyebrow}
       </div>
       <h1 className="text-2xl font-black tracking-tight sm:text-3xl">
@@ -676,7 +772,7 @@ const Btn = ({
     type={type}
     disabled={disabled}
     onClick={onClick}
-    className={`rounded-xl px-4 py-2.5 text-xs font-black ${variant === "primary" ? "bg-[#ff641e] text-black hover:bg-[#ff7a3d]" : variant === "danger" ? "border border-red-500/30 bg-red-500/10 text-red-400" : "border border-[#30343b] bg-[#15171b] text-zinc-300 hover:bg-[#202329]"}`}
+    className={`rounded-xl px-4 py-2.5 text-xs font-black ${variant === "primary" ? "bg-[#e8893a] text-[#17120e] hover:bg-[#f09a52]" : variant === "danger" ? "border border-[#d96c6c]/35 bg-[#d96c6c]/10 text-[#e89a9a]" : "border border-[#3a4552] bg-[#222a33] text-[#c8ced5] hover:bg-[#29323c]"}`}
   >
     {children}
   </button>
@@ -685,7 +781,7 @@ const Empty = ({ text }: { text: string }) => (
   <div className="py-16 text-center text-xs text-zinc-600">{text}</div>
 );
 function Dashboard({ store, go, vendor }: Ctx) {
-  const pending = store.sales.filter((s) => !s.settled);
+  const pending = store.sales.filter((s) => s.settlement_status === "pending");
   const recent = [...store.products]
     .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
     .slice(0, 5);
@@ -734,7 +830,7 @@ function Dashboard({ store, go, vendor }: Ctx) {
           {recent.map((p) => (
             <div
               key={p.id}
-              className="flex items-center gap-3 border-b border-[#22252a] p-4 last:border-0"
+              className="flex items-center gap-3 border-b border-[#29323c] p-4 last:border-0"
             >
               <Brand p={p} />
               <div className="min-w-0 flex-1">
@@ -763,7 +859,7 @@ function Dashboard({ store, go, vendor }: Ctx) {
                 return (
                   <div
                     key={s.id}
-                    className="border-b border-[#22252a] p-4 last:border-0"
+                    className="border-b border-[#29323c] p-4 last:border-0"
                   >
                     <div className="flex justify-between gap-3">
                       <div className="min-w-0">
@@ -823,7 +919,7 @@ const CardTitle = ({
   title: string;
   action?: React.ReactNode;
 }) => (
-  <div className="flex items-center justify-between border-b border-[#292c32] p-5">
+  <div className="flex items-center justify-between border-b border-[#303944] p-5">
     <b className="text-sm">{title}</b>
     {action}
   </div>
@@ -1015,7 +1111,7 @@ function Detail({
               </div>
             ))}
           </div>
-          <hr className="my-6 border-[#292c32]" />
+          <hr className="my-6 border-[#303944]" />
           <div className="grid gap-3 sm:grid-cols-2">
             <label>
               <span className="kc-label">目前售價</span>
@@ -1083,7 +1179,7 @@ function Detail({
             {[...p.history].reverse().map((h, i) => (
               <div
                 key={i}
-                className="relative border-l border-[#343840] pb-6 pl-5 last:pb-0"
+                className="relative border-l border-[#46515e] pb-6 pl-5 last:pb-0"
               >
                 <i className="absolute -left-1 top-1 h-2 w-2 rounded-full bg-orange-500" />
                 <div className="text-xs font-bold">{h.action}</div>
@@ -1100,7 +1196,7 @@ function Detail({
   );
 }
 
-function Inbound({ store, setStore, go, notify }: Ctx) {
+function Inbound({ store, createInventory, go, notify }: Ctx) {
   const defaults = {
     code: "",
     category: "鞋款",
@@ -1120,31 +1216,42 @@ function Inbound({ store, setStore, go, notify }: Ctx) {
     note: "",
   };
   const [f, setF] = useState(defaults);
+  const [submitting, setSubmitting] = useState(false);
   const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
-  const submit = (e: FormEvent) => {
+  const normalizedCode = normalizeScanCode(f.code);
+  const codeConflict = store.products.find(
+    (product) => normalizeScanCode(product.scan_code) === normalizedCode,
+  );
+  const submit = async (e: FormEvent) => {
     e.preventDefault();
-    if (
-      store.products.some((p) => p.code.toLowerCase() === f.code.toLowerCase())
-    )
-      return notify("貨號已存在，請重新確認");
-    const t = now();
-    const p: Product = {
-      ...f,
-      id: crypto.randomUUID(),
-      cost: Number(f.cost),
-      price: Number(f.price),
-      status: "在庫",
-      createdAt: t,
-      history: [
-        { at: t, action: "商品入庫", note: `建立商品，位置 ${f.location}` },
-      ],
-    };
-    setStore((s) => ({ ...s, products: [p, ...s.products] }));
-    notify("商品已成功入庫");
-    go("inventory");
+    if (!normalizedCode) return notify("請輸入貨號 / QR CODE");
+    if (codeConflict)
+      return notify("貨號已存在");
+    setSubmitting(true);
+    try {
+      const { code: _legacyCode, ...formValues } = f;
+      void _legacyCode;
+      const product = await createInventory({
+        ...formValues,
+        scan_code: normalizedCode,
+        cost: Number(f.cost),
+        price: Number(f.price),
+      });
+      notify(`商品已入庫 · ID ${shortSystemId(product.inventory_id)}`);
+      go("inventory");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      notify(
+        message.includes("SCAN_CODE") || message.includes("scan code")
+          ? "貨號已存在"
+          : "商品入庫失敗，資料未建立",
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
   const fields = [
-    ["貨號 / QR CODE", "code", "KC00014-001", "text"],
+    ["貨號 / QR CODE（不可重複）", "code", "KC00014-001", "text"],
     ["分類", "category", "", "cat"],
     ["商品名稱", "name", "例：Nike Air Max 95", "text"],
     ["品牌", "brand", "Nike", "text"],
@@ -1168,7 +1275,7 @@ function Inbound({ store, setStore, go, notify }: Ctx) {
         desc="建立寄賣商品資料，送出後立即加入庫存"
       />
       <form onSubmit={submit} className="kc-card p-5 sm:p-7">
-        <div className="mb-6 border-b border-[#292c32] pb-3 text-sm font-black">
+        <div className="mb-6 border-b border-[#303944] pb-3 text-sm font-black">
           基本資料
         </div>
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
@@ -1200,12 +1307,20 @@ function Inbound({ store, setStore, go, notify }: Ctx) {
               ) : (
                 <input
                   required
-                  className="kc-input"
+                  className={`kc-input ${key === "code" && normalizedCode && codeConflict ? "border-red-500/60" : ""}`}
                   type={type}
                   value={String(f[key as keyof typeof f])}
                   placeholder={ph}
                   onChange={(e) => set(key, e.target.value)}
+                  onBlur={() => {
+                    if (key === "code") set("code", normalizedCode);
+                  }}
                 />
+              )}
+              {key === "code" && normalizedCode && codeConflict && (
+                <span className="mt-1 block text-[10px] font-bold text-red-400">
+                  此貨號已綁定 {codeConflict.name}，不可再次使用
+                </span>
               )}
             </label>
           ))}
@@ -1223,71 +1338,71 @@ function Inbound({ store, setStore, go, notify }: Ctx) {
           <Btn variant="ghost" onClick={() => setF(defaults)}>
             清除表單
           </Btn>
-          <Btn type="submit">確認商品入庫</Btn>
+          <Btn type="submit" disabled={submitting}>
+            {submitting ? "建立中…" : "確認商品入庫"}
+          </Btn>
         </div>
       </form>
     </>
   );
 }
 
-function POS({ store, setStore, vendor, notify }: Ctx) {
+function POS({ store, completeSale, notify }: Ctx) {
   const [code, setCode] = useState("");
   const [found, setFound] = useState<Product | null>(null);
+  const [duplicates, setDuplicates] = useState<Product[]>([]);
   const [price, setPrice] = useState("");
   const [discount, setDiscount] = useState("0");
   const [payment, setPayment] = useState("現金");
+  const [submitting, setSubmitting] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   useEffect(() => input.current?.focus(), []);
   const search = (e: FormEvent) => {
     e.preventDefault();
-    const p =
-      store.products.find(
-        (x) => x.code.toLowerCase() === code.trim().toLowerCase(),
-      ) || null;
+    const scanCode = normalizeScanCode(code);
+    const matches = store.products.filter(
+      (product) => normalizeScanCode(product.scan_code) === scanCode,
+    );
+    if (matches.length > 1) {
+      setFound(null);
+      setDuplicates(matches);
+      notify(`偵測到 ${matches.length} 筆重複貨號，已禁止銷售`);
+      return;
+    }
+    const p = matches[0] || null;
+    setDuplicates([]);
     setFound(p);
     if (p) {
       setPrice(String(p.price));
       setDiscount("0");
     } else notify("找不到此貨號，請重新掃描");
   };
-  const sell = () => {
-    if (!found || found.status !== "在庫") return;
-    const actual = Number(price),
-      t = now();
-    const sale: Sale = {
-      id: crypto.randomUUID(),
-      productId: found.id,
-      soldAt: t,
-      price: actual,
-      cost: found.cost,
-      profit: actual - found.cost,
-      payment,
-      discount: Number(discount),
-      settled: false,
-    };
-    setStore((s) => ({
-      ...s,
-      sales: [...s.sales, sale],
-      products: s.products.map((p) =>
-        p.id === found.id
-          ? {
-              ...p,
-              status: "已售出",
-              history: [
-                ...p.history,
-                {
-                  at: t,
-                  action: "商品售出",
-                  note: `${payment} · 成交價 ${money(actual)} · 毛利 ${money(actual - found.cost)}`,
-                },
-              ],
-            }
-          : p,
-      ),
-    }));
-    notify(`${found.code} 已完成售出`);
-    setCode("");
-    setFound(null);
+  const sell = async () => {
+    if (!found || found.status !== "在庫" || submitting) return;
+    setSubmitting(true);
+    try {
+      const sale = await completeSale({
+        inventory_id: found.inventory_id,
+        sold_price: Number(price),
+        payment_method: payment,
+        discount: Number(discount),
+      });
+      notify(`${found.scan_code} 已售出 · 待結款 · ${shortSystemId(sale.sale_id)}`);
+      setCode("");
+      setFound(null);
+      setDuplicates([]);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      notify(
+        message.includes("NOT_AVAILABLE") ||
+          message.includes("ALREADY_SOLD") ||
+          message.includes("not available")
+          ? "此商品已售出，不可再次銷售"
+          : "結帳失敗，銷售與庫存均未變更",
+      );
+    } finally {
+      setSubmitting(false);
+    }
   };
   return (
     <>
@@ -1314,6 +1429,24 @@ function POS({ store, setStore, vendor, notify }: Ctx) {
           <Btn type="submit">搜尋商品</Btn>
         </div>
       </form>
+      {duplicates.length > 1 && (
+        <div className="mt-5 rounded-2xl border border-red-500/40 bg-red-500/10 p-5">
+          <div className="text-sm font-black text-red-300">
+            ⚠ 重複貨號，系統已停止銷售
+          </div>
+          <p className="mt-2 text-xs leading-5 text-red-200/70">
+            貨號 {normalizeScanCode(code)} 對應到 {duplicates.length} 件商品，請先由管理員更正貨號，避免售錯與重複回帳。
+          </p>
+          <div className="mt-4 space-y-2">
+            {duplicates.map((product) => (
+              <div key={product.id} className="rounded-xl bg-black/25 px-4 py-3 text-xs">
+                <b>{product.name}</b>
+                <span className="ml-2 text-zinc-500">{product.model} · US {product.usSize}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
       {found ? (
         <div className="mt-5 grid gap-5 xl:grid-cols-[1.1fr_.9fr]">
           <section className="kc-card p-5">
@@ -1327,7 +1460,7 @@ function POS({ store, setStore, vendor, notify }: Ctx) {
               </div>
             )}
             <div className="flex flex-col gap-5 sm:flex-row">
-              <div className="grid h-44 w-full shrink-0 place-items-center rounded-2xl border border-dashed border-[#343840] bg-[#0c0e11] text-center text-xs text-zinc-700 sm:w-44">
+              <div className="grid h-44 w-full shrink-0 place-items-center rounded-2xl border border-dashed border-[#46515e] bg-[#171c22] text-center text-xs text-[#707b87] sm:w-44">
                 PRODUCT
                 <br />
                 IMAGE
@@ -1335,10 +1468,9 @@ function POS({ store, setStore, vendor, notify }: Ctx) {
               <div className="grid flex-1 grid-cols-2 gap-4">
                 {[
                   ["商品名稱", found.name],
-                  ["貨號", found.code],
+                  ["貨號", found.scan_code],
                   ["尺寸", `US ${found.usSize} / ${found.cmSize} CM`],
                   ["型號", found.model],
-                  ["寄賣廠商", vendor(found.vendorId)?.name || "-"],
                   ["原售價", money(found.price)],
                 ].map(([a, b]) => (
                   <div key={a}>
@@ -1387,24 +1519,18 @@ function POS({ store, setStore, vendor, notify }: Ctx) {
                   </select>
                 </label>
               </div>
-              <div className="rounded-xl bg-[#0c0e11] p-4 text-xs">
+              <div className="rounded-xl bg-[#171c22] p-4 text-xs">
                 <div className="flex justify-between text-zinc-500">
                   <span>成交價</span>
                   <b className="text-white">{money(Number(price))}</b>
                 </div>
-                <div className="mt-2 flex justify-between text-zinc-500">
-                  <span>預估毛利</span>
-                  <b className="text-emerald-400">
-                    {money(Number(price) - found.cost)}
-                  </b>
-                </div>
               </div>
               <button
-                disabled={found.status !== "在庫" || !Number(price)}
+                disabled={found.status !== "在庫" || !Number(price) || submitting}
                 onClick={sell}
-                className="w-full rounded-xl bg-[#ff641e] py-4 text-sm font-black text-black disabled:bg-zinc-700"
+                className="w-full rounded-xl bg-[#e8893a] py-4 text-sm font-black text-[#17120e] hover:bg-[#f09a52] disabled:bg-[#46515e]"
               >
-                確認售出
+                {submitting ? "結帳處理中…" : "確認售出"}
               </button>
             </div>
           </section>
@@ -1475,12 +1601,12 @@ function Vendors({ store }: Ctx) {
                     "待結款",
                     money(
                       ss
-                        .filter((s) => !s.settled)
+                        .filter((s) => s.settlement_status === "pending")
                         .reduce((a, s) => a + s.cost, 0),
                     ),
                   ],
                 ].map(([a, b]) => (
-                  <div className="rounded-xl bg-[#0c0e11] p-3" key={a}>
+                  <div className="rounded-xl bg-[#171c22] p-3" key={a}>
                     <div className="text-[9px] text-zinc-600">{a}</div>
                     <div className="mt-1 text-xs font-black">{b}</div>
                   </div>
@@ -1494,7 +1620,8 @@ function Vendors({ store }: Ctx) {
   );
 }
 function Settle({ store, setStore, vendor, notify }: Ctx) {
-  const pending = store.sales.filter((s) => !s.settled);
+  const settlementLock = useRef(false);
+  const pending = store.sales.filter((s) => s.settlement_status === "pending");
   const vids = [
     ...new Set(
       pending
@@ -1508,49 +1635,81 @@ function Settle({ store, setStore, vendor, notify }: Ctx) {
     (s) => store.products.find((p) => p.id === s.productId)?.vendorId === vid,
   );
   const chosen = list.filter((s) => checked.includes(s.id));
+  const duplicateCodeCounts = list.reduce<Record<string, number>>((counts, sale) => {
+    const product = store.products.find((item) => item.id === sale.productId);
+    if (!product) return counts;
+    const normalized = normalizeScanCode(product.scan_code);
+    counts[normalized] = (counts[normalized] || 0) + 1;
+    return counts;
+  }, {});
+  const duplicateCodes = Object.entries(duplicateCodeCounts)
+    .filter(([, count]) => count > 1)
+    .map(([code]) => code);
   const toggle = (id: string) =>
     setChecked((c) =>
       c.includes(id) ? c.filter((x) => x !== id) : [...c, id],
     );
   const settle = () => {
-    if (!chosen.length) return;
+    if (!chosen.length || settlementLock.current) return;
+    settlementLock.current = true;
     const t = now(),
-      id = `ST${t.replace(/\D/g, "")}`,
-      ids = chosen.map((s) => s.productId);
-    const rec: Settlement = {
-      id,
-      vendorId: vid,
-      saleIds: checked,
-      totalSales: chosen.reduce((a, s) => a + s.price, 0),
-      payout: chosen.reduce((a, s) => a + s.cost, 0),
-      profit: chosen.reduce((a, s) => a + s.profit, 0),
-      completedAt: t,
-    };
-    setStore((s) => ({
-      ...s,
-      settlements: [...s.settlements, rec],
-      sales: s.sales.map((x) =>
-        checked.includes(x.id) ? { ...x, settled: true, settlementId: id } : x,
-      ),
-      products: s.products.map((p) =>
-        ids.includes(p.id)
-          ? {
-              ...p,
-              status: "已銷帳",
-              history: [
-                ...p.history,
-                {
-                  at: t,
-                  action: "完成銷帳",
-                  note: `結款單 ${id} · 應付 ${money(p.cost)}`,
-                },
-              ],
-            }
-          : p,
-      ),
-    }));
+      id = `ST${t.replace(/\D/g, "")}-${crypto.randomUUID().slice(0, 6).toUpperCase()}`;
+    setStore((current) => {
+      const eligible = current.sales.filter((sale) => {
+        if (!checked.includes(sale.id) || sale.settlement_status !== "pending") return false;
+        const product = current.products.find((item) => item.id === sale.productId);
+        return product?.vendorId === vid;
+      });
+      if (!eligible.length) return current;
+
+      const eligibleSaleIds = eligible.map((sale) => sale.id);
+      const eligibleProductIds = new Set(eligible.map((sale) => sale.productId));
+      const rec: Settlement = {
+        id,
+        vendorId: vid,
+        saleIds: eligibleSaleIds,
+        totalSales: eligible.reduce((sum, sale) => sum + sale.price, 0),
+        payout: eligible.reduce((sum, sale) => sum + sale.cost, 0),
+        profit: eligible.reduce((sum, sale) => sum + sale.profit, 0),
+        completedAt: t,
+      };
+
+      return {
+        ...current,
+        settlements: [...current.settlements, rec],
+        sales: current.sales.map((sale) =>
+          eligibleSaleIds.includes(sale.id)
+            ? {
+                ...sale,
+                settlement_status: "settled" as const,
+                settled: true,
+                settlementId: id,
+              }
+            : sale,
+        ),
+        products: current.products.map((product) =>
+          eligibleProductIds.has(product.id)
+            ? {
+                ...product,
+                status: "已銷帳",
+                history: [
+                  ...product.history,
+                  {
+                    at: t,
+                    action: "完成銷帳",
+                    note: `結款單 ${id} · 銷售 ID ${eligible.find((sale) => sale.productId === product.id)?.id || "-"} · 應付 ${money(product.cost)}`,
+                  },
+                ],
+              }
+            : product,
+        ),
+      };
+    });
     setChecked([]);
     notify(`已完成 ${chosen.length} 筆銷帳`);
+    window.setTimeout(() => {
+      settlementLock.current = false;
+    }, 1200);
   };
   return (
     <>
@@ -1579,6 +1738,13 @@ function Settle({ store, setStore, vendor, notify }: Ctx) {
           </select>
         </label>
       </div>
+      {duplicateCodes.length > 0 && (
+        <div className="mb-4 rounded-2xl border border-amber-500/40 bg-amber-500/10 p-4 text-xs leading-5 text-amber-200">
+          <b>注意：待結款資料中有重複貨號 {duplicateCodes.join("、")}</b>
+          <br />
+          系統會依每筆不同的「系統銷售 ID」分開計算，不會因貨號相同而合併或重複回帳。
+        </div>
+      )}
       <div className="kc-card overflow-x-auto">
         <table className="kc-table">
           <thead>
@@ -1594,6 +1760,7 @@ function Settle({ store, setStore, vendor, notify }: Ctx) {
               </th>
               {[
                 "貨號",
+                "系統銷售 ID",
                 "商品",
                 "尺寸",
                 "售出日期",
@@ -1622,6 +1789,9 @@ function Settle({ store, setStore, vendor, notify }: Ctx) {
                     />
                   </td>
                   <td className="font-mono text-orange-400">{p.code}</td>
+                  <td className="font-mono text-[10px] text-zinc-500" title={s.id}>
+                    {shortSystemId(s.id)}
+                  </td>
                   <td className="font-bold">{p.name}</td>
                   <td>US {p.usSize}</td>
                   <td>{fmt(s.soldAt, true)}</td>
@@ -1645,7 +1815,7 @@ function Settle({ store, setStore, vendor, notify }: Ctx) {
           />
         )}
       </div>
-      <div className="sticky bottom-4 mt-5 flex flex-col gap-4 rounded-2xl border border-orange-500/30 bg-[#18130f]/95 p-5 shadow-2xl sm:flex-row sm:items-center">
+      <div className="sticky bottom-4 mt-5 flex flex-col gap-4 rounded-2xl border border-[#e8893a]/35 bg-[#211b17]/95 p-5 shadow-2xl sm:flex-row sm:items-center">
         <div className="grid flex-1 grid-cols-2 gap-4 md:grid-cols-4">
           {[
             ["商品件數", chosen.length + " 件"],
@@ -1758,9 +1928,9 @@ function Sales({ store, vendor }: Ctx) {
                   <td>{s.payment}</td>
                   <td>{vendor(p?.vendorId)?.name}</td>
                   <td
-                    className={s.settled ? "text-blue-400" : "text-orange-400"}
+                    className={s.settlement_status === "settled" ? "text-blue-400" : "text-orange-400"}
                   >
-                    {s.settled ? "已銷帳" : "待銷帳"}
+                    {s.settlement_status === "settled" ? "已銷帳" : "待銷帳"}
                   </td>
                 </tr>
               );

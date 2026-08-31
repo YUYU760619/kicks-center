@@ -1,0 +1,250 @@
+export type Status =
+  | "在庫"
+  | "已售出"
+  | "已銷帳"
+  | "已取回"
+  | "已下架"
+  | "已調度";
+
+export type SettlementStatus = "pending" | "deferred" | "settled";
+
+export type Vendor = {
+  id: string;
+  code: string;
+  name: string;
+  phone: string;
+  joined: string;
+};
+
+export type Log = { at: string; action: string; note: string };
+
+export type Product = {
+  inventory_id: string;
+  scan_code: string;
+  /** Compatibility alias for pre-stage-1 screens. Always equals inventory_id. */
+  id: string;
+  /** Compatibility alias for pre-stage-1 screens. Always equals scan_code. */
+  code: string;
+  category: string;
+  name: string;
+  brand: string;
+  model: string;
+  usSize: string;
+  cmSize: string;
+  color: string;
+  cost: number;
+  price: number;
+  vendorId: string;
+  location: string;
+  consignmentStart: string;
+  consignmentEnd: string;
+  packaging: string;
+  note: string;
+  status: Status;
+  createdAt: string;
+  history: Log[];
+};
+
+export type Sale = {
+  sale_id: string;
+  checkout_id?: string;
+  inventory_id: string;
+  sold_at: string;
+  sold_price: number;
+  return_price: number;
+  vendor_id: string;
+  payment_method: string;
+  settlement_status: SettlementStatus;
+  /** Compatibility aliases for existing screens. */
+  id: string;
+  productId: string;
+  soldAt: string;
+  price: number;
+  cost: number;
+  profit: number;
+  payment: string;
+  discount: number;
+  settled: boolean;
+  settlementId?: string;
+};
+
+export type Settlement = {
+  id: string;
+  vendorId: string;
+  saleIds: string[];
+  totalSales: number;
+  payout: number;
+  profit: number;
+  completedAt: string;
+};
+
+export type Store = {
+  products: Product[];
+  vendors: Vendor[];
+  sales: Sale[];
+  settlements: Settlement[];
+};
+
+export type InventoryInput = Omit<
+  Product,
+  "inventory_id" | "scan_code" | "id" | "code" | "status" | "createdAt" | "history"
+> & { scan_code: string };
+
+export type SaleInput = {
+  inventory_id: string;
+  sold_price: number;
+  payment_method: string;
+  discount: number;
+};
+
+export function normalizeScanCode(value: string) {
+  return value.trim().toUpperCase();
+}
+
+export function normalizeStoreSchema(rawStore: Store): Store {
+  const products = (rawStore.products || []).map((rawProduct) => {
+    const legacy = rawProduct as Product & {
+      inventory_id?: string;
+      scan_code?: string;
+    };
+    const inventoryId = legacy.inventory_id || legacy.id;
+    const scanCode = normalizeScanCode(legacy.scan_code || legacy.code);
+    return {
+      ...legacy,
+      inventory_id: inventoryId,
+      scan_code: scanCode,
+      id: inventoryId,
+      code: scanCode,
+    };
+  });
+
+  const productById = new Map(products.map((product) => [product.inventory_id, product]));
+  const sales = (rawStore.sales || []).map((rawSale) => {
+    const legacy = rawSale as Sale & Partial<Sale>;
+    const saleId = legacy.sale_id || legacy.id;
+    const inventoryId = legacy.inventory_id || legacy.productId;
+    const product = productById.get(inventoryId);
+    const settlementStatus: SettlementStatus =
+      legacy.settlement_status || (legacy.settled ? "settled" : "pending");
+    const soldAt = legacy.sold_at || legacy.soldAt;
+    const soldPrice = legacy.sold_price ?? legacy.price;
+    const returnPrice = legacy.return_price ?? legacy.cost;
+    const paymentMethod = legacy.payment_method || legacy.payment;
+    return {
+      ...legacy,
+      sale_id: saleId,
+      inventory_id: inventoryId,
+      sold_at: soldAt,
+      sold_price: soldPrice,
+      return_price: returnPrice,
+      vendor_id: legacy.vendor_id || product?.vendorId || "",
+      payment_method: paymentMethod,
+      settlement_status: settlementStatus,
+      id: saleId,
+      productId: inventoryId,
+      soldAt,
+      price: soldPrice,
+      cost: returnPrice,
+      payment: paymentMethod,
+      settled: settlementStatus === "settled",
+    };
+  });
+
+  return { ...rawStore, products, sales };
+}
+
+export function createInventoryInStore(
+  store: Store,
+  input: InventoryInput,
+  inventoryId: string,
+  createdAt: string,
+): { store: Store; product: Product } {
+  const scanCode = normalizeScanCode(input.scan_code);
+  if (!scanCode) throw new Error("SCAN_CODE_REQUIRED");
+  if (store.products.some((product) => normalizeScanCode(product.scan_code) === scanCode)) {
+    throw new Error("SCAN_CODE_EXISTS");
+  }
+
+  const product: Product = {
+    ...input,
+    inventory_id: inventoryId,
+    scan_code: scanCode,
+    id: inventoryId,
+    code: scanCode,
+    status: "在庫",
+    createdAt,
+    history: [
+      {
+        at: createdAt,
+        action: "商品入庫",
+        note: `建立商品，位置 ${input.location} · inventory_id ${inventoryId}`,
+      },
+    ],
+  };
+
+  return {
+    store: { ...store, products: [product, ...store.products] },
+    product,
+  };
+}
+
+export function sellInventoryInStore(
+  store: Store,
+  input: SaleInput,
+  saleId: string,
+  soldAt: string,
+): { store: Store; sale: Sale } {
+  const product = store.products.find(
+    (item) => item.inventory_id === input.inventory_id,
+  );
+  if (!product) throw new Error("INVENTORY_NOT_FOUND");
+  if (product.status !== "在庫") throw new Error("INVENTORY_NOT_AVAILABLE");
+  if (store.sales.some((sale) => sale.inventory_id === input.inventory_id)) {
+    throw new Error("INVENTORY_ALREADY_SOLD");
+  }
+  if (!Number.isFinite(input.sold_price) || input.sold_price <= 0) {
+    throw new Error("INVALID_SALE_PRICE");
+  }
+
+  const sale: Sale = {
+    sale_id: saleId,
+    inventory_id: product.inventory_id,
+    sold_at: soldAt,
+    sold_price: input.sold_price,
+    return_price: product.cost,
+    vendor_id: product.vendorId,
+    payment_method: input.payment_method,
+    settlement_status: "pending",
+    id: saleId,
+    productId: product.inventory_id,
+    soldAt,
+    price: input.sold_price,
+    cost: product.cost,
+    profit: input.sold_price - product.cost,
+    payment: input.payment_method,
+    discount: input.discount,
+    settled: false,
+  };
+
+  const nextProducts = store.products.map((item) =>
+    item.inventory_id === product.inventory_id
+      ? {
+          ...item,
+          status: "已售出" as const,
+          history: [
+            ...item.history,
+            {
+              at: soldAt,
+              action: "商品售出",
+              note: `${input.payment_method} · 成交價 NT$ ${Math.round(input.sold_price).toLocaleString("zh-TW")} · sale_id ${saleId}`,
+            },
+          ],
+        }
+      : item,
+  );
+
+  return {
+    store: { ...store, sales: [...store.sales, sale], products: nextProducts },
+    sale,
+  };
+}

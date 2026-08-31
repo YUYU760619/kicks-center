@@ -10,6 +10,9 @@
     "build": "next build",
     "start": "next start",
     "build:sites": "vinext build",
+    "test:stage1": "node --experimental-strip-types scripts/test-stage1.mjs",
+    "test:pos-security": "node scripts/test-pos-security.mjs",
+    "test:pos-checkout": "node scripts/test-pos-checkout.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {

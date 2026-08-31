@@ -6,5 +6,5 @@ import { VendorDetailPage } from '../../vendor-detail-page';
 
 export default function VendorDetailRoute() {
   const params = useParams<{ id: string }>();
-  return <AuthGate portal="staff"><VendorDetailPage vendorId={params.id} /></AuthGate>;
+  return <AuthGate portal="admin"><VendorDetailPage vendorId={params.id} /></AuthGate>;
 }
