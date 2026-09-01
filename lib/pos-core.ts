@@ -90,6 +90,8 @@ export type InventoryInput = Omit<
   "inventory_id" | "scan_code" | "id" | "code" | "status" | "createdAt" | "history"
 > & { scan_code: string };
 
+export type VendorInput = Omit<Vendor, "id">;
+
 export type SaleInput = {
   inventory_id: string;
   sold_price: number;
@@ -115,6 +117,44 @@ export function isCurrentVendorId(
   vendorId: string,
 ) {
   return vendorId.length > 0 && vendors.some((vendor) => vendor.id === vendorId);
+}
+
+export function normalizeVendorCode(value: string) {
+  return value.trim().toUpperCase();
+}
+
+export function createVendorInStore(
+  store: Store,
+  input: VendorInput,
+  vendorId: string,
+  createdOn: string,
+): { store: Store; vendor: Vendor } {
+  const id = vendorId.trim();
+  const code = normalizeVendorCode(input.code);
+  const name = input.name.trim();
+  if (!id) throw new Error("VENDOR_ID_REQUIRED");
+  if (!code) throw new Error("VENDOR_CODE_REQUIRED");
+  if (!name) throw new Error("VENDOR_NAME_REQUIRED");
+  if (store.vendors.some((vendor) => vendor.id === id))
+    throw new Error("VENDOR_ID_EXISTS");
+  if (
+    store.vendors.some(
+      (vendor) => normalizeVendorCode(vendor.code) === code,
+    )
+  )
+    throw new Error("VENDOR_CODE_EXISTS");
+
+  const vendor: Vendor = {
+    id,
+    code,
+    name,
+    phone: input.phone.trim(),
+    joined: input.joined.trim() || createdOn,
+  };
+  return {
+    vendor,
+    store: { ...store, vendors: [...store.vendors, vendor] },
+  };
 }
 
 export function normalizeStoreSchema(rawStore: Store): Store {

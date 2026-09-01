@@ -4,6 +4,7 @@ import {
   type InventoryInput,
   type SaleInput,
   type Store,
+  type VendorInput,
 } from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { supabase } from "@/lib/supabase";
@@ -61,6 +62,7 @@ type MutationRow = {
   inventory_id?: string;
   sale_id?: string;
   deleted_inventory_id?: string;
+  vendor_id?: string;
 };
 
 function operationError(error: { code?: string; message: string }) {
@@ -93,6 +95,32 @@ export async function createInventoryItem(
     store: normalizeStoreSchema(row.payload),
     updatedAt: row.updated_at,
     inventoryId: row.inventory_id,
+  };
+}
+
+export async function createVendorItem(
+  input: VendorInput,
+  expectedUpdatedAt: string,
+): Promise<{ store: Store; updatedAt: string; vendorId: string }> {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { data, error } = await supabase
+    .rpc("kc_admin_create_vendor", {
+      p_vendor: input,
+      p_expected_updated_at: expectedUpdatedAt,
+    })
+    .single();
+
+  if (error) throw operationError(error);
+  const row = data as MutationRow | null;
+  if (!row?.payload || !row.updated_at || !row.vendor_id) {
+    throw new PosOperationError("Vendor creation returned incomplete data", "INVALID_RESPONSE");
+  }
+
+  return {
+    store: normalizeStoreSchema(row.payload),
+    updatedAt: row.updated_at,
+    vendorId: row.vendor_id,
   };
 }
 

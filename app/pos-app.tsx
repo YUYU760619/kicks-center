@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   createInventoryItem,
+  createVendorItem,
   deleteInventoryItem,
   loadPosStore,
   PosOperationError,
@@ -12,10 +13,12 @@ import {
 } from "@/lib/pos-store";
 import {
   createInventoryInStore,
+  createVendorInStore,
   deleteInventoryFromStore,
   getInitialInboundVendorId,
   isCurrentVendorId,
   normalizeScanCode,
+  normalizeVendorCode,
   sellInventoryInStore,
   type InventoryInput,
   type Log,
@@ -25,6 +28,7 @@ import {
   type Status,
   type Store,
   type Vendor,
+  type VendorInput,
 } from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { supabase } from "@/lib/supabase";
@@ -430,6 +434,7 @@ type Ctx = {
   store: Store;
   setStore: React.Dispatch<React.SetStateAction<Store>>;
   createInventory: (input: InventoryInput) => Promise<Product>;
+  createVendor: (input: VendorInput) => Promise<Vendor>;
   completeSale: (input: {
     inventory_id: string;
     sold_price: number;
@@ -568,6 +573,36 @@ export function PosApp({
       setSyncing(false);
     }
   };
+  const createVendor = async (input: VendorInput) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        const result = createVendorInStore(
+          store,
+          input,
+          crypto.randomUUID(),
+          new Date().toISOString().slice(0, 10),
+        );
+        setStore(result.store);
+        return result.vendor;
+      }
+      const expectedUpdatedAt = await prepareCoreMutation();
+      const result = await createVendorItem(input, expectedUpdatedAt);
+      applyCloudMutation(result.store, result.updatedAt);
+      const vendor = result.store.vendors.find(
+        (item) => item.id === result.vendorId,
+      );
+      if (!vendor) throw new Error("CREATED_VENDOR_NOT_FOUND");
+      return vendor;
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
   const completeSale = async (input: {
     inventory_id: string;
     sold_price: number;
@@ -635,6 +670,7 @@ export function PosApp({
     store,
     setStore,
     createInventory,
+    createVendor,
     completeSale,
     deleteInventory,
     go,
@@ -1805,13 +1841,74 @@ function POS({ store, completeSale, notify }: Ctx) {
   );
 }
 
-function Vendors({ store }: Ctx) {
+function Vendors({ store, createVendor, notify }: Ctx) {
+  const emptyForm = { code: "", name: "", phone: "", joined: "" };
+  const [showCreate, setShowCreate] = useState(false);
+  const [form, setForm] = useState(emptyForm);
+  const [formError, setFormError] = useState("");
+  const [submitting, setSubmitting] = useState(false);
+  const normalizedCode = normalizeVendorCode(form.code);
+  const duplicateCode = store.vendors.some(
+    (vendor) => normalizeVendorCode(vendor.code) === normalizedCode,
+  );
+  const resetCreate = () => {
+    setShowCreate(false);
+    setForm(emptyForm);
+    setFormError("");
+  };
+  const closeCreate = () => {
+    if (submitting) return;
+    resetCreate();
+  };
+  const submitCreate = async (event: FormEvent) => {
+    event.preventDefault();
+    const name = form.name.trim();
+    if (!normalizedCode) return setFormError("請輸入廠商編號");
+    if (!name) return setFormError("請輸入姓名／名稱");
+    if (duplicateCode) return setFormError("廠商編號已存在");
+
+    setSubmitting(true);
+    setFormError("");
+    try {
+      const vendor = await createVendor({
+        code: normalizedCode,
+        name,
+        phone: form.phone.trim(),
+        joined: form.joined,
+      });
+      resetCreate();
+      notify(`寄賣廠商 ${vendor.code} · ${vendor.name} 已建立`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (message.includes("VENDOR_CODE_EXISTS")) {
+        setFormError("廠商編號已存在");
+      } else if (message.includes("VENDOR_CODE_REQUIRED")) {
+        setFormError("請輸入廠商編號");
+      } else if (message.includes("VENDOR_NAME_REQUIRED")) {
+        setFormError("請輸入姓名／名稱");
+      } else if (message.includes("VENDOR_JOINED_INVALID")) {
+        setFormError("合作開始日格式不正確");
+      } else if (error instanceof PosStoreConflictError) {
+        setFormError("資料已被其他工作站更新，畫面已重新載入，請重新確認後再建立");
+      } else if (
+        (error instanceof PosOperationError && error.code === "42501") ||
+        message.includes("admin access required")
+      ) {
+        setFormError("只有啟用中的管理員可以新增寄賣廠商");
+      } else {
+        setFormError("寄賣廠商建立失敗，資料未變更");
+      }
+    } finally {
+      setSubmitting(false);
+    }
+  };
   return (
     <>
       <Heading
         eyebrow="Consignors"
         title="寄賣廠商"
         desc="每位寄賣廠商都有獨立管理頁面，不再以 Excel Sheet 分散管理"
+        action={<Btn onClick={() => setShowCreate(true)}>＋ 新增寄賣廠商</Btn>}
       />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {store.vendors.map((v) => {
@@ -1869,6 +1966,124 @@ function Vendors({ store }: Ctx) {
           );
         })}
       </div>
+      {!store.vendors.length && (
+        <div className="kc-card py-16 text-center text-xs text-zinc-500">
+          尚無寄賣廠商，請使用右上角按鈕建立第一位寄賣廠商
+        </div>
+      )}
+      {showCreate && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
+          <form
+            onSubmit={submitCreate}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="create-vendor-title"
+            className="w-full max-w-[620px] rounded-3xl border border-[#303944] bg-[#1d232b] p-6 shadow-2xl sm:p-8"
+          >
+            <div className="flex items-start justify-between gap-5">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[.18em] text-[#e8893a]">
+                  New Consignor
+                </div>
+                <h2 id="create-vendor-title" className="mt-2 text-xl font-black">
+                  新增寄賣廠商
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="關閉新增寄賣廠商"
+                onClick={closeCreate}
+                disabled={submitting}
+                className="grid h-9 w-9 place-items-center rounded-full border border-[#46515e] text-zinc-400 disabled:opacity-40"
+              >
+                ×
+              </button>
+            </div>
+            <div className="mt-6 grid gap-4 sm:grid-cols-2">
+              <label>
+                <span className="kc-label">廠商編號 *</span>
+                <input
+                  autoFocus
+                  required
+                  className={`kc-input font-mono uppercase ${normalizedCode && duplicateCode ? "border-red-500/60" : ""}`}
+                  value={form.code}
+                  onChange={(event) => {
+                    setForm((current) => ({ ...current, code: event.target.value }));
+                    setFormError("");
+                  }}
+                  onBlur={() =>
+                    setForm((current) => ({
+                      ...current,
+                      code: normalizeVendorCode(current.code),
+                    }))
+                  }
+                  placeholder="NKS00003"
+                  autoComplete="off"
+                />
+                {normalizedCode && duplicateCode && (
+                  <span className="mt-1 block text-[10px] font-bold text-red-400">
+                    此廠商編號已存在
+                  </span>
+                )}
+              </label>
+              <label>
+                <span className="kc-label">姓名／名稱 *</span>
+                <input
+                  required
+                  className="kc-input"
+                  value={form.name}
+                  onChange={(event) => {
+                    setForm((current) => ({ ...current, name: event.target.value }));
+                    setFormError("");
+                  }}
+                  placeholder="例：路易"
+                />
+              </label>
+              <label>
+                <span className="kc-label">聯絡電話</span>
+                <input
+                  className="kc-input"
+                  value={form.phone}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, phone: event.target.value }))
+                  }
+                  placeholder="選填"
+                />
+              </label>
+              <label>
+                <span className="kc-label">合作開始日</span>
+                <input
+                  type="date"
+                  className="kc-input"
+                  value={form.joined}
+                  onChange={(event) =>
+                    setForm((current) => ({ ...current, joined: event.target.value }))
+                  }
+                />
+                <span className="mt-1 block text-[10px] text-zinc-600">
+                  未填時使用建立當天
+                </span>
+              </label>
+            </div>
+            {formError && (
+              <div className="mt-5 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-bold text-red-400">
+                {formError}
+              </div>
+            )}
+            <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Btn variant="ghost" onClick={closeCreate} disabled={submitting}>
+                取消
+              </Btn>
+              <Btn
+                type="submit"
+                disabled={submitting || !normalizedCode || !form.name.trim() || duplicateCode}
+              >
+                {submitting ? "建立中…" : "確認建立"}
+              </Btn>
+            </div>
+          </form>
+        </div>
+      )}
     </>
   );
 }

@@ -1,7 +1,7 @@
 "use client";
 
 import type { Session } from "@supabase/supabase-js";
-import { FormEvent, ReactNode, useEffect, useState } from "react";
+import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { supabase } from "@/lib/supabase";
@@ -18,57 +18,107 @@ type Member = {
 export function AuthGate({ children, portal = "staff" }: { children: ReactNode; portal?: Portal }) {
   const [status, setStatus] = useState<AuthStatus>(() => supabase ? "checking" : "misconfigured");
   const [member, setMember] = useState<Member | null>(null);
+  const [validatedPortal, setValidatedPortal] = useState<Portal | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const authorizationSequence = useRef(0);
 
   useEffect(() => {
     if (!supabase) return;
 
     let active = true;
-    async function authorize(session: Session | null) {
-      if (!active) return;
+    const beginAuthorization = () => {
+      const requestId = ++authorizationSequence.current;
+      if (active) {
+        setStatus("checking");
+        setMember(null);
+        setValidatedPortal(null);
+      }
+      return requestId;
+    };
+    async function authorize(session: Session | null, requestId: number) {
+      if (!active || requestId !== authorizationSequence.current) return;
       if (!session) {
         clearSensitiveBrowserState();
         setMember(null);
+        setValidatedPortal(portal);
         setStatus("signed-out");
         return;
       }
 
+      const sessionUserId = session.user.id;
       const { data, error: memberError } = await supabase!
         .from("kc_app_members")
         .select("user_id, role, vendor_id, active")
-        .eq("user_id", session.user.id)
+        .eq("user_id", sessionUserId)
         .maybeSingle();
 
-      if (!active) return;
+      if (!active || requestId !== authorizationSequence.current) return;
       if (memberError) {
+        setMember(null);
+        setValidatedPortal(portal);
         setStatus("error");
         return;
       }
 
       const resolved = data as Member | null;
+      if (!resolved || resolved.user_id !== sessionUserId) {
+        setMember(null);
+        setValidatedPortal(portal);
+        setStatus("forbidden");
+        return;
+      }
+
       setMember(resolved);
-      const allowed = resolved?.active && (
+      const allowed = resolved.active && (
         portal === "admin"
           ? resolved.role === "admin"
           : portal === "staff"
             ? resolved.role === "admin" || resolved.role === "staff"
             : resolved.role === "vendor" && Boolean(resolved.vendor_id)
       );
+      setValidatedPortal(portal);
       setStatus(allowed ? "authorized" : "forbidden");
     }
 
-    supabase.auth.getSession().then(({ data }) => authorize(data.session));
+    async function revalidate() {
+      const requestId = beginAuthorization();
+      const { data, error: sessionError } = await supabase!.auth.getSession();
+      if (!active || requestId !== authorizationSequence.current) return;
+      if (sessionError) {
+        setMember(null);
+        setValidatedPortal(portal);
+        setStatus("error");
+        return;
+      }
+      await authorize(data.session, requestId);
+    }
+
     const { data } = supabase.auth.onAuthStateChange((_event, session) => {
-      void authorize(session);
+      const requestId = beginAuthorization();
+      void authorize(session, requestId);
     });
+    void revalidate();
+
+    const handlePageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) void revalidate();
+    };
+    window.addEventListener("pageshow", handlePageShow);
     return () => {
       active = false;
+      authorizationSequence.current += 1;
+      window.removeEventListener("pageshow", handlePageShow);
       data.subscription.unsubscribe();
     };
   }, [portal]);
+
+  const visibleStatus = !supabase
+    ? "misconfigured"
+    : validatedPortal === portal
+      ? status
+      : "checking";
 
   async function login(event: FormEvent) {
     event.preventDefault();
@@ -91,25 +141,25 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
     if (supabase) await supabase.auth.signOut();
   }
 
-  if (status === "checking") {
+  if (visibleStatus === "checking") {
     return <div className="grid min-h-screen place-items-center bg-[#11151a] text-sm text-[#98a2ad]">正在確認登入狀態…</div>;
   }
 
-  if (status === "misconfigured" || status === "error") {
+  if (visibleStatus === "misconfigured" || visibleStatus === "error") {
     return (
       <main className="grid min-h-screen place-items-center bg-[#11151a] px-5 text-[#e7eaee]">
         <div className="w-full max-w-[520px] rounded-3xl border border-[#d96c6c]/25 bg-[#1d232b] p-8 text-center shadow-2xl">
           <div className="text-3xl">🔒</div>
           <h1 className="mt-5 text-xl font-black">系統已安全鎖定</h1>
           <p className="mt-3 text-sm leading-6 text-zinc-500">
-            {status === "misconfigured" ? "正式環境缺少必要的 Supabase 安全設定，系統拒絕開放。" : "無法驗證帳號權限，請稍後重試或聯絡管理員。"}
+            {visibleStatus === "misconfigured" ? "正式環境缺少必要的 Supabase 安全設定，系統拒絕開放。" : "無法驗證帳號權限，請稍後重試或聯絡管理員。"}
           </p>
         </div>
       </main>
     );
   }
 
-  if (status === "forbidden") {
+  if (visibleStatus === "forbidden") {
     const isVendor = member?.role === "vendor";
     const isStaffDeniedBackend = portal === "admin" && member?.role === "staff";
     const destination = isStaffDeniedBackend ? "/pos" : isVendor ? "/vendor" : "/";
@@ -133,7 +183,7 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
     );
   }
 
-  if (status === "signed-out") {
+  if (visibleStatus === "signed-out") {
     const vendorPortal = portal === "vendor";
     return (
       <main className="grid min-h-screen place-items-center bg-[#11151a] px-5 text-[#e7eaee]">
@@ -158,5 +208,5 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
     );
   }
 
-  return status === "authorized" ? children : null;
+  return visibleStatus === "authorized" ? children : null;
 }
