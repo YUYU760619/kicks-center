@@ -3,13 +3,16 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   createInventoryItem,
+  deleteInventoryItem,
   loadPosStore,
+  PosOperationError,
   PosStoreConflictError,
   savePosStore,
   sellInventoryItem,
 } from "@/lib/pos-store";
 import {
   createInventoryInStore,
+  deleteInventoryFromStore,
   normalizeScanCode,
   sellInventoryInStore,
   type InventoryInput,
@@ -431,6 +434,7 @@ type Ctx = {
     payment_method: string;
     discount: number;
   }) => Promise<Sale>;
+  deleteInventory: (product: Product, confirmScanCode: string) => Promise<void>;
   go: (p: Page) => void;
   notify: (m: string) => void;
   vendor: (id: string) => Vendor | undefined;
@@ -590,12 +594,47 @@ export function PosApp({
       setSyncing(false);
     }
   };
+  const deleteInventory = async (product: Product, confirmScanCode: string) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        const result = deleteInventoryFromStore(store, {
+          inventory_id: product.inventory_id,
+          confirm_scan_code: confirmScanCode,
+        });
+        setStore(result.store);
+      } else {
+        const expectedUpdatedAt = await prepareCoreMutation();
+        const result = await deleteInventoryItem(
+          {
+            inventory_id: product.inventory_id,
+            confirm_scan_code: confirmScanCode,
+          },
+          expectedUpdatedAt,
+        );
+        applyCloudMutation(result.store, result.updatedAt);
+
+        const latest = await loadPosStore();
+        applyCloudMutation(latest.store, latest.updatedAt);
+      }
+      notify(`商品 ${product.scan_code} 已永久刪除`);
+      go("inventory");
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
   const vendor = (id: string) => store.vendors.find((v) => v.id === id);
   const c = {
     store,
     setStore,
     createInventory,
     completeSale,
+    deleteInventory,
     go,
     notify,
     vendor,
@@ -933,6 +972,7 @@ const Brand = ({ p }: { p: Product }) => (
 function Inventory({
   store,
   setStore,
+  deleteInventory,
   vendor,
   selected,
   setSelected,
@@ -950,12 +990,24 @@ function Inventory({
         .includes(q.toLowerCase()),
   );
   const p = store.products.find((x) => x.id === selected);
-  if (p)
+  if (p) {
+    const relatedSaleIds = new Set(
+      store.sales
+        .filter((sale) => sale.inventory_id === p.inventory_id)
+        .map((sale) => sale.sale_id),
+    );
+    const hasFinancialHistory =
+      relatedSaleIds.size > 0 ||
+      store.settlements.some((settlement) =>
+        settlement.saleIds.some((saleId) => relatedSaleIds.has(saleId)),
+      );
     return (
       <Detail
         p={p}
         vendor={vendor(p.vendorId)}
+        hasFinancialHistory={hasFinancialHistory}
         back={() => setSelected(null)}
+        deleteInventory={deleteInventory}
         update={(patch, action, note) => {
           setStore((s) => ({
             ...s,
@@ -973,6 +1025,7 @@ function Inventory({
         }}
       />
     );
+  }
   return (
     <>
       <Heading
@@ -1071,16 +1124,63 @@ function Inventory({
 function Detail({
   p,
   vendor,
+  hasFinancialHistory,
   back,
   update,
+  deleteInventory,
 }: {
   p: Product;
   vendor?: Vendor;
+  hasFinancialHistory: boolean;
   back: () => void;
   update: (p: Partial<Product>, a: string, n: string) => void;
+  deleteInventory: (product: Product, confirmScanCode: string) => Promise<void>;
 }) {
   const [price, setPrice] = useState(String(p.price));
   const [loc, setLoc] = useState(p.location);
+  const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
+  const [confirmScanCode, setConfirmScanCode] = useState("");
+  const [deleteError, setDeleteError] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  const closeDeleteDialog = () => {
+    if (deleting) return;
+    setDeleteStep(0);
+    setConfirmScanCode("");
+    setDeleteError("");
+  };
+  const confirmDelete = async () => {
+    if (confirmScanCode !== p.scan_code || deleting) return;
+    setDeleting(true);
+    setDeleteError("");
+    try {
+      await deleteInventory(p, confirmScanCode);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (
+        error instanceof PosOperationError &&
+        (error.code === "23503" || message.includes("INVENTORY_HAS_FINANCIAL_HISTORY"))
+      ) {
+        setDeleteError("此商品已有銷售／銷帳紀錄，為保留財務歷史不可直接刪除");
+      } else if (
+        message.includes("DELETE_SCAN_CODE_CONFIRMATION_MISMATCH")
+      ) {
+        setDeleteError("輸入的完整貨號不相符，商品未刪除");
+      } else if (error instanceof PosStoreConflictError) {
+        setDeleteError("資料已被其他工作站更新，畫面已重新載入，請重新確認後再操作");
+      } else if (message.includes("INVENTORY_NOT_FOUND")) {
+        setDeleteError("找不到這件商品，畫面資料可能已過期");
+      } else if (
+        (error instanceof PosOperationError && error.code === "42501") ||
+        message.includes("admin access required")
+      ) {
+        setDeleteError("只有啟用中的管理員可以刪除商品");
+      } else {
+        setDeleteError("刪除失敗，資料未變更，請重新整理後再試");
+      }
+    } finally {
+      setDeleting(false);
+    }
+  };
   return (
     <>
       <button onClick={back} className="mb-5 text-xs font-bold text-zinc-400">
@@ -1172,6 +1272,29 @@ function Detail({
               </>
             )}
           </div>
+          <div className="mt-8 border-t border-[#d96c6c]/20 pt-6">
+            <div className="text-xs font-black text-[#e89a9a]">危險操作</div>
+            <p className="mt-2 max-w-2xl text-[11px] leading-5 text-zinc-500">
+              永久刪除只適用於誤建且完全沒有銷售或銷帳關聯的商品。系統會保留刪除前備份與 audit 紀錄。
+            </p>
+            {hasFinancialHistory ? (
+              <div className="mt-4 rounded-xl border border-[#d96c6c]/30 bg-[#d96c6c]/10 p-4 text-xs font-bold leading-5 text-[#e89a9a]">
+                此商品已有銷售／銷帳紀錄，為保留財務歷史不可直接刪除
+              </div>
+            ) : (
+              <div className="mt-4">
+                <Btn
+                  variant="danger"
+                  onClick={() => {
+                    setDeleteStep(1);
+                    setDeleteError("");
+                  }}
+                >
+                  刪除商品
+                </Btn>
+              </div>
+            )}
+          </div>
         </div>
         <div className="kc-card overflow-hidden">
           <CardTitle title="歷史紀錄" />
@@ -1192,6 +1315,105 @@ function Detail({
           </div>
         </div>
       </div>
+      {deleteStep > 0 && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="delete-inventory-title"
+            className="w-full max-w-[560px] rounded-3xl border border-[#d96c6c]/35 bg-[#1d232b] p-6 shadow-2xl sm:p-8"
+          >
+            <div className="flex items-start justify-between gap-5">
+              <div>
+                <div className="text-[10px] font-black uppercase tracking-[.18em] text-[#e89a9a]">
+                  {deleteStep === 1 ? "第一次確認" : "第二次確認"}
+                </div>
+                <h2 id="delete-inventory-title" className="mt-2 text-xl font-black">
+                  永久刪除這件商品？
+                </h2>
+              </div>
+              <button
+                type="button"
+                aria-label="關閉刪除確認"
+                onClick={closeDeleteDialog}
+                disabled={deleting}
+                className="grid h-9 w-9 place-items-center rounded-full border border-[#46515e] text-zinc-400 disabled:opacity-40"
+              >
+                ×
+              </button>
+            </div>
+
+            <dl className="mt-6 grid gap-3 rounded-2xl border border-[#303944] bg-[#171c22] p-4 sm:grid-cols-2">
+              {[
+                ["貨號", p.scan_code],
+                ["商品名稱", p.name],
+                ["inventory_id", p.inventory_id],
+                ["目前狀態", p.status],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <dt className="text-[9px] font-bold text-zinc-600">{label}</dt>
+                  <dd className={`mt-1 break-all text-xs font-bold ${label === "貨號" || label === "inventory_id" ? "font-mono" : ""}`}>
+                    {value}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+
+            {deleteStep === 1 ? (
+              <>
+                <p className="mt-5 text-xs leading-6 text-zinc-400">
+                  這會從目前庫存永久移除指定 inventory_id。只有完全沒有銷售／銷帳關聯的商品才會通過資料庫檢查。
+                </p>
+                <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <Btn variant="ghost" onClick={closeDeleteDialog}>取消</Btn>
+                  <Btn variant="danger" onClick={() => setDeleteStep(2)}>
+                    我已確認商品資料，繼續
+                  </Btn>
+                </div>
+              </>
+            ) : (
+              <>
+                <label className="mt-5 block">
+                  <span className="kc-label">
+                    請輸入完整貨號 <b className="font-mono text-[#e89a9a]">{p.scan_code}</b>
+                  </span>
+                  <input
+                    autoFocus
+                    className="kc-input mt-2 font-mono uppercase"
+                    value={confirmScanCode}
+                    onChange={(event) => {
+                      setConfirmScanCode(event.target.value);
+                      setDeleteError("");
+                    }}
+                    placeholder={p.scan_code}
+                    autoComplete="off"
+                  />
+                </label>
+                {confirmScanCode && confirmScanCode !== p.scan_code && (
+                  <p className="mt-2 text-[11px] font-bold text-[#e89a9a]">完整貨號尚未完全吻合</p>
+                )}
+                {deleteError && (
+                  <div className="mt-4 rounded-xl border border-[#d96c6c]/30 bg-[#d96c6c]/10 p-4 text-xs font-bold leading-5 text-[#e89a9a]">
+                    {deleteError}
+                  </div>
+                )}
+                <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <Btn variant="ghost" onClick={() => setDeleteStep(1)} disabled={deleting}>
+                    上一步
+                  </Btn>
+                  <Btn
+                    variant="danger"
+                    onClick={() => void confirmDelete()}
+                    disabled={confirmScanCode !== p.scan_code || deleting}
+                  >
+                    {deleting ? "正在安全刪除…" : "永久刪除商品"}
+                  </Btn>
+                </div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
     </>
   );
 }

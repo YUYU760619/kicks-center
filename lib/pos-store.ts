@@ -1,5 +1,6 @@
 import {
   normalizeStoreSchema,
+  type DeleteInventoryInput,
   type InventoryInput,
   type SaleInput,
   type Store,
@@ -59,6 +60,7 @@ type MutationRow = {
   updated_at?: string;
   inventory_id?: string;
   sale_id?: string;
+  deleted_inventory_id?: string;
 };
 
 function operationError(error: { code?: string; message: string }) {
@@ -91,6 +93,33 @@ export async function createInventoryItem(
     store: normalizeStoreSchema(row.payload),
     updatedAt: row.updated_at,
     inventoryId: row.inventory_id,
+  };
+}
+
+export async function deleteInventoryItem(
+  input: DeleteInventoryInput,
+  expectedUpdatedAt: string,
+): Promise<{ store: Store; updatedAt: string; deletedInventoryId: string }> {
+  if (!supabase) throw new Error("Supabase is not configured");
+
+  const { data, error } = await supabase
+    .rpc("kc_admin_delete_inventory_item", {
+      p_inventory_id: input.inventory_id,
+      p_confirm_scan_code: input.confirm_scan_code,
+      p_expected_updated_at: expectedUpdatedAt,
+    })
+    .single();
+
+  if (error) throw operationError(error);
+  const row = data as MutationRow | null;
+  if (!row?.payload || !row.updated_at || !row.deleted_inventory_id) {
+    throw new PosOperationError("Inventory deletion returned incomplete data", "INVALID_RESPONSE");
+  }
+
+  return {
+    store: normalizeStoreSchema(row.payload),
+    updatedAt: row.updated_at,
+    deletedInventoryId: row.deleted_inventory_id,
   };
 }
 

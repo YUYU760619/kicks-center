@@ -13,6 +13,7 @@
     "test:stage1": "node --experimental-strip-types scripts/test-stage1.mjs",
     "test:pos-security": "node scripts/test-pos-security.mjs",
     "test:pos-checkout": "node scripts/test-pos-checkout.mjs",
+    "test:admin-delete": "node --experimental-strip-types scripts/test-admin-delete.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {

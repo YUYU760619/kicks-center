@@ -97,6 +97,11 @@ export type SaleInput = {
   discount: number;
 };
 
+export type DeleteInventoryInput = {
+  inventory_id: string;
+  confirm_scan_code: string;
+};
+
 export function normalizeScanCode(value: string) {
   return value.trim().toUpperCase();
 }
@@ -184,6 +189,40 @@ export function createInventoryInStore(
 
   return {
     store: { ...store, products: [product, ...store.products] },
+    product,
+  };
+}
+
+export function deleteInventoryFromStore(
+  store: Store,
+  input: DeleteInventoryInput,
+): { store: Store; product: Product } {
+  const product = store.products.find(
+    (item) => item.inventory_id === input.inventory_id,
+  );
+  if (!product) throw new Error("INVENTORY_NOT_FOUND");
+  if (input.confirm_scan_code !== product.scan_code) {
+    throw new Error("DELETE_SCAN_CODE_CONFIRMATION_MISMATCH");
+  }
+
+  const relatedSales = store.sales.filter(
+    (sale) => sale.inventory_id === input.inventory_id,
+  );
+  const relatedSaleIds = new Set(relatedSales.map((sale) => sale.sale_id));
+  const hasSettlement = store.settlements.some((settlement) =>
+    settlement.saleIds.some((saleId) => relatedSaleIds.has(saleId)),
+  );
+  if (relatedSales.length > 0 || hasSettlement) {
+    throw new Error("INVENTORY_HAS_FINANCIAL_HISTORY");
+  }
+
+  return {
+    store: {
+      ...store,
+      products: store.products.filter(
+        (item) => item.inventory_id !== input.inventory_id,
+      ),
+    },
     product,
   };
 }
