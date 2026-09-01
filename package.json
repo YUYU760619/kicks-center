@@ -16,6 +16,7 @@
     "test:admin-delete": "node --experimental-strip-types scripts/test-admin-delete.mjs",
     "test:admin-create-vendor": "node --experimental-strip-types scripts/test-admin-create-vendor.mjs",
     "test:auth-gate-navigation": "node scripts/test-auth-gate-navigation.mjs",
+    "test:pos-navigation": "node --experimental-strip-types scripts/test-pos-navigation.mjs",
     "test:inbound-empty-vendors": "node --experimental-strip-types scripts/test-inbound-empty-vendors.mjs",
     "test:return-confirmation": "node --experimental-strip-types scripts/test-return-confirmation.mjs",
     "test:inbound-draft": "node --experimental-strip-types scripts/test-inbound-draft.mjs",

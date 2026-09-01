@@ -40,6 +40,11 @@ import {
   saveInboundDraft,
   type InboundDraft,
 } from "@/lib/inbound-draft";
+import {
+  buildAdminPageUrl,
+  readAdminPage,
+  type AdminPage,
+} from "@/lib/admin-navigation";
 
 export type { Product, Sale, Status, Store, Vendor } from "@/lib/pos-core";
 const vendors: Vendor[] = [
@@ -437,7 +442,7 @@ const nav = [
   ["sales", "銷售紀錄", "↗"],
   ["settings", "設定", "⚙"],
 ] as const;
-type Page = (typeof nav)[number][0];
+type Page = AdminPage;
 type Ctx = {
   store: Store;
   setStore: React.Dispatch<React.SetStateAction<Store>>;
@@ -479,12 +484,9 @@ export function PosApp({
   const coreMutationLockRef = useRef(false);
   useEffect(() => {
     if (preview) return;
-    const requested = new URLSearchParams(window.location.search).get(
-      "page",
-    ) as Page | null;
-    if (requested && nav.some(([id]) => id === requested)) {
-      window.setTimeout(() => setPage(requested), 0);
-    }
+    const syncPageFromUrl = () => setPage(readAdminPage(window.location.search));
+    syncPageFromUrl();
+    window.addEventListener("popstate", syncPageFromUrl);
     loadPosStore()
       .then(({ store: loadedStore, updatedAt }) => {
         versionRef.current = updatedAt;
@@ -493,6 +495,7 @@ export function PosApp({
         setReady(true);
       })
       .catch(() => setLoadError("雲端資料載入失敗，為避免覆蓋正式資料，系統已停止操作。"));
+    return () => window.removeEventListener("popstate", syncPageFromUrl);
   }, [preview]);
   useEffect(() => {
     if (preview || !ready) return;
@@ -525,6 +528,13 @@ export function PosApp({
     return () => window.clearTimeout(timer);
   }, [store, ready, preview]);
   const go = (p: Page) => {
+    if (!preview) {
+      window.history.replaceState(
+        window.history.state,
+        "",
+        buildAdminPageUrl(window.location.href, p),
+      );
+    }
     setPage(p);
     setSelected(null);
     setMobile(false);
