@@ -8,6 +8,7 @@ import {
   loadPosStore,
   PosOperationError,
   PosStoreConflictError,
+  returnInventoryItem,
   savePosStore,
   sellInventoryItem,
 } from "@/lib/pos-store";
@@ -19,6 +20,7 @@ import {
   isCurrentVendorId,
   normalizeScanCode,
   normalizeVendorCode,
+  returnInventoryInStore,
   sellInventoryInStore,
   type InventoryInput,
   type Log,
@@ -32,6 +34,12 @@ import {
 } from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { supabase } from "@/lib/supabase";
+import {
+  clearInboundDraft,
+  loadInboundDraft,
+  saveInboundDraft,
+  type InboundDraft,
+} from "@/lib/inbound-draft";
 
 export type { Product, Sale, Status, Store, Vendor } from "@/lib/pos-core";
 const vendors: Vendor[] = [
@@ -442,6 +450,7 @@ type Ctx = {
     discount: number;
   }) => Promise<Sale>;
   deleteInventory: (product: Product, confirmScanCode: string) => Promise<void>;
+  returnInventory: (product: Product) => Promise<void>;
   go: (p: Page) => void;
   notify: (m: string) => void;
   vendor: (id: string) => Vendor | undefined;
@@ -665,6 +674,34 @@ export function PosApp({
       setSyncing(false);
     }
   };
+  const returnInventory = async (product: Product) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        const result = returnInventoryInStore(
+          store,
+          { inventory_id: product.inventory_id },
+          now(),
+        );
+        setStore(result.store);
+      } else {
+        const expectedUpdatedAt = await prepareCoreMutation();
+        const result = await returnInventoryItem(
+          { inventory_id: product.inventory_id },
+          expectedUpdatedAt,
+        );
+        applyCloudMutation(result.store, result.updatedAt);
+      }
+      notify(`商品 ${product.scan_code} 已確認取回`);
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
   const vendor = (id: string) => store.vendors.find((v) => v.id === id);
   const c = {
     store,
@@ -673,6 +710,7 @@ export function PosApp({
     createVendor,
     completeSale,
     deleteInventory,
+    returnInventory,
     go,
     notify,
     vendor,
@@ -1011,6 +1049,7 @@ function Inventory({
   store,
   setStore,
   deleteInventory,
+  returnInventory,
   vendor,
   selected,
   setSelected,
@@ -1046,6 +1085,7 @@ function Inventory({
         hasFinancialHistory={hasFinancialHistory}
         back={() => setSelected(null)}
         deleteInventory={deleteInventory}
+        returnInventory={returnInventory}
         update={(patch, action, note) => {
           setStore((s) => ({
             ...s,
@@ -1166,6 +1206,7 @@ function Detail({
   back,
   update,
   deleteInventory,
+  returnInventory,
 }: {
   p: Product;
   vendor?: Vendor;
@@ -1173,6 +1214,7 @@ function Detail({
   back: () => void;
   update: (p: Partial<Product>, a: string, n: string) => void;
   deleteInventory: (product: Product, confirmScanCode: string) => Promise<void>;
+  returnInventory: (product: Product) => Promise<void>;
 }) {
   const [price, setPrice] = useState(String(p.price));
   const [loc, setLoc] = useState(p.location);
@@ -1180,6 +1222,9 @@ function Detail({
   const [confirmScanCode, setConfirmScanCode] = useState("");
   const [deleteError, setDeleteError] = useState("");
   const [deleting, setDeleting] = useState(false);
+  const [returnPending, setReturnPending] = useState(false);
+  const [returnError, setReturnError] = useState("");
+  const [returning, setReturning] = useState(false);
   const closeDeleteDialog = () => {
     if (deleting) return;
     setDeleteStep(0);
@@ -1219,6 +1264,33 @@ function Detail({
       setDeleting(false);
     }
   };
+  const confirmReturn = async () => {
+    if (returning) return;
+    setReturning(true);
+    setReturnError("");
+    try {
+      await returnInventory(p);
+      setReturnPending(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (error instanceof PosStoreConflictError) {
+        setReturnError("資料已被其他工作站更新，畫面已重新載入，請重新確認後再操作");
+      } else if (message.includes("INVENTORY_NOT_AVAILABLE")) {
+        setReturnError("商品目前不是在庫狀態，無法取回");
+      } else if (message.includes("INVENTORY_HAS_FINANCIAL_HISTORY")) {
+        setReturnError("商品已有銷售紀錄，無法改為取回");
+      } else if (
+        (error instanceof PosOperationError && error.code === "42501") ||
+        message.includes("admin access required")
+      ) {
+        setReturnError("只有啟用中的管理員可以確認商品取回");
+      } else {
+        setReturnError("商品取回失敗，資料未變更");
+      }
+    } finally {
+      setReturning(false);
+    }
+  };
   return (
     <>
       <button onClick={back} className="mb-5 text-xs font-bold text-zinc-400">
@@ -1240,7 +1312,7 @@ function Detail({
               ["回價", money(p.cost)],
               ["寄賣廠商", vendor?.name || "-"],
               ["包裝狀態", p.packaging],
-              ["寄賣期間", `${p.consignmentStart} ～ ${p.consignmentEnd}`],
+              ["寄賣開始", p.consignmentStart],
               ["備註", p.note || "無"],
             ].map(([a, b]) => (
               <div key={a}>
@@ -1293,9 +1365,10 @@ function Detail({
                 </Btn>
                 <Btn
                   variant="ghost"
-                  onClick={() =>
-                    update({ status: "已取回" }, "商品取回", "寄賣人取回商品")
-                  }
+                  onClick={() => {
+                    setReturnPending(true);
+                    setReturnError("");
+                  }}
                 >
                   取回
                 </Btn>
@@ -1452,12 +1525,65 @@ function Detail({
           </section>
         </div>
       )}
+      {returnPending && (
+        <div className="fixed inset-0 z-[70] grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="return-inventory-title"
+            className="w-full max-w-[560px] rounded-3xl border border-[#d9a441]/35 bg-[#1d232b] p-6 shadow-2xl sm:p-8"
+          >
+            <div className="text-[10px] font-black uppercase tracking-[.18em] text-[#e0b85f]">
+              待確認
+            </div>
+            <h2 id="return-inventory-title" className="mt-2 text-xl font-black">
+              確認商品取回
+            </h2>
+            <p className="mt-3 text-xs leading-5 text-zinc-500">
+              目前尚未修改任何資料。確認後商品才會改為已取回，並新增一筆歷史紀錄。
+            </p>
+            <div className="mt-6 grid gap-4 rounded-2xl bg-[#171c22] p-5 sm:grid-cols-2">
+              {[
+                ["貨號", p.scan_code],
+                ["商品名稱", p.name],
+                ["尺寸", `US ${p.usSize} / ${p.cmSize} CM`],
+                ["寄賣廠商", vendor?.name || "-"],
+              ].map(([label, value]) => (
+                <div key={label}>
+                  <div className="text-[9px] font-bold text-zinc-600">{label}</div>
+                  <div className="mt-1 text-xs font-bold">{value}</div>
+                </div>
+              ))}
+            </div>
+            {returnError && (
+              <div className="mt-5 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-bold text-red-400">
+                {returnError}
+              </div>
+            )}
+            <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+              <Btn
+                variant="ghost"
+                disabled={returning}
+                onClick={() => {
+                  setReturnPending(false);
+                  setReturnError("");
+                }}
+              >
+                取消
+              </Btn>
+              <Btn disabled={returning} onClick={() => void confirmReturn()}>
+                {returning ? "確認中…" : "確認取回"}
+              </Btn>
+            </div>
+          </section>
+        </div>
+      )}
     </>
   );
 }
 
 function Inbound({ store, createInventory, go, notify }: Ctx) {
-  const defaults = {
+  const defaults: InboundDraft = {
     code: "",
     category: "鞋款",
     name: "",
@@ -1471,13 +1597,35 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
     vendorId: getInitialInboundVendorId(store.vendors),
     location: "A-01",
     consignmentStart: new Date().toISOString().slice(0, 10),
-    consignmentEnd: "2026-12-31",
     packaging: "完整鞋盒",
     note: "",
   };
-  const [f, setF] = useState(defaults);
+  const skipNextDraftSaveRef = useRef(false);
+  const [f, setF] = useState<InboundDraft>(() => {
+    if (typeof window === "undefined") return defaults;
+    return loadInboundDraft(
+      window.localStorage,
+      defaults,
+      new Set(store.vendors.map((vendor) => vendor.id)),
+    );
+  });
+  const [draftSaved, setDraftSaved] = useState(true);
   const [submitting, setSubmitting] = useState(false);
-  const set = (k: string, v: string) => setF((x) => ({ ...x, [k]: v }));
+  useEffect(() => {
+    if (skipNextDraftSaveRef.current) {
+      skipNextDraftSaveRef.current = false;
+      return;
+    }
+    try {
+      saveInboundDraft(window.localStorage, f);
+    } catch {
+      // The form remains usable if browser storage is unavailable.
+    }
+  }, [f]);
+  const set = (k: keyof InboundDraft, v: string) => {
+    setDraftSaved(true);
+    setF((current) => ({ ...current, [k]: v }));
+  };
   const normalizedCode = normalizeScanCode(f.code);
   const codeConflict = store.products.find(
     (product) => normalizeScanCode(product.scan_code) === normalizedCode,
@@ -1499,6 +1647,7 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
         cost: Number(f.cost),
         price: Number(f.price),
       });
+      clearInboundDraft(window.localStorage);
       notify(`商品已入庫 · ID ${shortSystemId(product.inventory_id)}`);
       go("inventory");
     } catch (error) {
@@ -1526,7 +1675,6 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
     ["寄賣廠商", "vendorId", "", "vendor"],
     ["庫存位置", "location", "A-01", "text"],
     ["寄賣開始日", "consignmentStart", "", "date"],
-    ["寄賣結束日", "consignmentEnd", "", "date"],
     ["包裝狀態", "packaging", "完整鞋盒", "text"],
   ];
   if (store.vendors.length === 0) {
@@ -1563,6 +1711,9 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
         title="商品入庫"
         desc="建立寄賣商品資料，送出後立即加入庫存"
       />
+      <div className="mb-3 text-right text-[10px] font-bold text-[#74bb96]">
+        {draftSaved ? "● 草稿已自動儲存" : "草稿暫存目前不可用"}
+      </div>
       <form onSubmit={submit} className="kc-card p-5 sm:p-7">
         <div className="mb-6 border-b border-[#303944] pb-3 text-sm font-black">
           基本資料
@@ -1575,7 +1726,7 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
                 <select
                   className="kc-input"
                   value={f.category}
-                  onChange={(e) => set(key, e.target.value)}
+                  onChange={(e) => set(key as keyof InboundDraft, e.target.value)}
                 >
                   <option>鞋款</option>
                   <option>服飾</option>
@@ -1585,7 +1736,7 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
                 <select
                   className="kc-input"
                   value={f.vendorId}
-                  onChange={(e) => set(key, e.target.value)}
+                  onChange={(e) => set(key as keyof InboundDraft, e.target.value)}
                 >
                   {store.vendors.map((v) => (
                     <option value={v.id} key={v.id}>
@@ -1600,7 +1751,7 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
                   type={type}
                   value={String(f[key as keyof typeof f])}
                   placeholder={ph}
-                  onChange={(e) => set(key, e.target.value)}
+                  onChange={(e) => set(key as keyof InboundDraft, e.target.value)}
                   onBlur={() => {
                     if (key === "code") set("code", normalizedCode);
                   }}
@@ -1624,7 +1775,16 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
           />
         </label>
         <div className="mt-6 flex justify-end gap-2">
-          <Btn variant="ghost" onClick={() => setF(defaults)}>
+          <Btn
+            variant="ghost"
+            onClick={() => {
+              skipNextDraftSaveRef.current = true;
+              setF(defaults);
+              clearInboundDraft(window.localStorage);
+              setDraftSaved(false);
+              notify("入庫草稿與表單已清除");
+            }}
+          >
             清除表單
           </Btn>
           <Btn type="submit" disabled={submitting}>

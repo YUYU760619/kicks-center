@@ -37,7 +37,8 @@ export type Product = {
   vendorId: string;
   location: string;
   consignmentStart: string;
-  consignmentEnd: string;
+  /** Legacy compatibility only. New inventory ends by sale/return/delist event. */
+  consignmentEnd?: string;
   packaging: string;
   note: string;
   status: Status;
@@ -102,6 +103,10 @@ export type SaleInput = {
 export type DeleteInventoryInput = {
   inventory_id: string;
   confirm_scan_code: string;
+};
+
+export type ReturnInventoryInput = {
+  inventory_id: string;
 };
 
 export function normalizeScanCode(value: string) {
@@ -275,6 +280,47 @@ export function deleteInventoryFromStore(
       ),
     },
     product,
+  };
+}
+
+export function returnInventoryInStore(
+  store: Store,
+  input: ReturnInventoryInput,
+  returnedAt: string,
+): { store: Store; product: Product } {
+  const inventoryId = input.inventory_id.trim();
+  if (!inventoryId) throw new Error("INVENTORY_ID_REQUIRED");
+
+  const product = store.products.find(
+    (item) => item.inventory_id === inventoryId,
+  );
+  if (!product) throw new Error("INVENTORY_NOT_FOUND");
+  if (product.status !== "在庫") throw new Error("INVENTORY_NOT_AVAILABLE");
+  if (store.sales.some((sale) => sale.inventory_id === inventoryId)) {
+    throw new Error("INVENTORY_HAS_FINANCIAL_HISTORY");
+  }
+
+  const returnedProduct: Product = {
+    ...product,
+    status: "已取回",
+    history: [
+      ...product.history,
+      {
+        at: returnedAt,
+        action: "商品取回",
+        note: "寄賣人取回商品",
+      },
+    ],
+  };
+
+  return {
+    product: returnedProduct,
+    store: {
+      ...store,
+      products: store.products.map((item) =>
+        item.inventory_id === inventoryId ? returnedProduct : item,
+      ),
+    },
   };
 }
 

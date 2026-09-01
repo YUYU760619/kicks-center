@@ -15,7 +15,7 @@ export type VendorPortalProduct = {
   status: string;
   packaging: string;
   consignmentStart: string;
-  consignmentEnd: string;
+  consignmentEnd?: string;
   createdAt: string;
   history: Array<{ at: string; action: string; note: string }>;
 };

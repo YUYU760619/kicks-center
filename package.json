@@ -17,6 +17,10 @@
     "test:admin-create-vendor": "node --experimental-strip-types scripts/test-admin-create-vendor.mjs",
     "test:auth-gate-navigation": "node scripts/test-auth-gate-navigation.mjs",
     "test:inbound-empty-vendors": "node --experimental-strip-types scripts/test-inbound-empty-vendors.mjs",
+    "test:return-confirmation": "node --experimental-strip-types scripts/test-return-confirmation.mjs",
+    "test:inbound-draft": "node --experimental-strip-types scripts/test-inbound-draft.mjs",
+    "test:inbound-no-end-date": "node scripts/test-inbound-no-end-date.mjs",
+    "test:vendor-account-isolation": "node scripts/test-vendor-account-isolation.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {
