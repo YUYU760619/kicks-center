@@ -14,6 +14,7 @@
     "test:pos-security": "node scripts/test-pos-security.mjs",
     "test:pos-checkout": "node scripts/test-pos-checkout.mjs",
     "test:admin-delete": "node --experimental-strip-types scripts/test-admin-delete.mjs",
+    "test:inbound-empty-vendors": "node --experimental-strip-types scripts/test-inbound-empty-vendors.mjs",
     "lint": "eslint . --ignore-pattern dist --ignore-pattern .next"
   },
   "dependencies": {

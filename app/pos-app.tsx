@@ -13,6 +13,8 @@ import {
 import {
   createInventoryInStore,
   deleteInventoryFromStore,
+  getInitialInboundVendorId,
+  isCurrentVendorId,
   normalizeScanCode,
   sellInventoryInStore,
   type InventoryInput,
@@ -1430,7 +1432,7 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
     color: "",
     cost: "",
     price: "",
-    vendorId: store.vendors[0].id,
+    vendorId: getInitialInboundVendorId(store.vendors),
     location: "A-01",
     consignmentStart: new Date().toISOString().slice(0, 10),
     consignmentEnd: "2026-12-31",
@@ -1449,6 +1451,8 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
     if (!normalizedCode) return notify("請輸入貨號 / QR CODE");
     if (codeConflict)
       return notify("貨號已存在");
+    if (!isCurrentVendorId(store.vendors, f.vendorId))
+      return notify("目前沒有有效的寄賣廠商，請先建立寄賣廠商");
     setSubmitting(true);
     try {
       const { code: _legacyCode, ...formValues } = f;
@@ -1489,6 +1493,33 @@ function Inbound({ store, createInventory, go, notify }: Ctx) {
     ["寄賣結束日", "consignmentEnd", "", "date"],
     ["包裝狀態", "packaging", "完整鞋盒", "text"],
   ];
+  if (store.vendors.length === 0) {
+    return (
+      <>
+        <Heading
+          eyebrow="New Stock"
+          title="商品入庫"
+          desc="建立寄賣商品資料，送出後立即加入庫存"
+        />
+        <section className="kc-card grid min-h-72 place-items-center p-6 text-center">
+          <div>
+            <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-full bg-[#e8893a]/10 text-2xl text-[#e8893a]">
+              ◎
+            </div>
+            <h2 className="text-base font-black">
+              目前尚無寄賣廠商，請先建立寄賣廠商後再入庫
+            </h2>
+            <p className="mt-2 text-xs leading-5 text-zinc-500">
+              商品入庫必須綁定有效的寄賣廠商。
+            </p>
+            <div className="mt-6">
+              <Btn onClick={() => go("vendors")}>前往寄賣廠商</Btn>
+            </div>
+          </div>
+        </section>
+      </>
+    );
+  }
   return (
     <>
       <Heading

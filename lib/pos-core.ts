@@ -106,6 +106,17 @@ export function normalizeScanCode(value: string) {
   return value.trim().toUpperCase();
 }
 
+export function getInitialInboundVendorId(vendors: Pick<Vendor, "id">[]) {
+  return vendors[0]?.id ?? "";
+}
+
+export function isCurrentVendorId(
+  vendors: Pick<Vendor, "id">[],
+  vendorId: string,
+) {
+  return vendorId.length > 0 && vendors.some((vendor) => vendor.id === vendorId);
+}
+
 export function normalizeStoreSchema(rawStore: Store): Store {
   const products = (rawStore.products || []).map((rawProduct) => {
     const legacy = rawProduct as Product & {
