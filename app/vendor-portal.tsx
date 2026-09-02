@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
-import { supabase } from "@/lib/supabase";
+import { vendorSupabase } from "@/lib/supabase";
 import {
   loadVendorPortalSnapshot,
   type VendorPortalProduct,
@@ -63,7 +63,7 @@ export function VendorPortal() {
             <div className="grid h-10 w-10 place-items-center rounded-xl bg-[#e8893a] font-black text-[#17120e]">KC</div>
             <div><div className="text-sm font-black tracking-[.08em]">KICKS CENTER</div><div className="mt-1 text-[9px] font-bold tracking-[.2em] text-orange-400">CONSIGNOR PORTAL</div></div>
           </div>
-          <button onClick={async () => { clearSensitiveBrowserState(); await supabase?.auth.signOut(); }} className="rounded-xl border border-[#3a4552] px-4 py-2 text-xs font-bold text-[#c8ced5]">安全登出</button>
+          <button onClick={async () => { clearSensitiveBrowserState(); await vendorSupabase?.auth.signOut(); }} className="rounded-xl border border-[#3a4552] px-4 py-2 text-xs font-bold text-[#c8ced5]">安全登出</button>
         </div>
       </header>
 

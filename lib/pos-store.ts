@@ -9,7 +9,7 @@ import {
   type VendorInput,
 } from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
-import { supabase } from "@/lib/supabase";
+import { adminSupabase } from "@/lib/supabase";
 
 const POS_STATE_ID = "main";
 
@@ -38,9 +38,9 @@ export async function loadPosStore(): Promise<{
   updatedAt: string;
 }> {
   clearSensitiveBrowserState();
-  if (!supabase) throw new Error("Supabase is not configured");
+  if (!adminSupabase) throw new Error("Supabase is not configured");
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .from("kc_pos_state")
     .select("payload, updated_at")
     .eq("id", POS_STATE_ID)
@@ -81,9 +81,9 @@ export async function createInventoryItem(
   input: InventoryInput,
   expectedUpdatedAt: string,
 ): Promise<{ store: Store; updatedAt: string; inventoryId: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
+  if (!adminSupabase) throw new Error("Supabase is not configured");
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .rpc("kc_staff_create_inventory_item", {
       p_item: input,
       p_expected_updated_at: expectedUpdatedAt,
@@ -107,9 +107,9 @@ export async function createVendorItem(
   input: VendorInput,
   expectedUpdatedAt: string,
 ): Promise<{ store: Store; updatedAt: string; vendorId: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
+  if (!adminSupabase) throw new Error("Supabase is not configured");
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .rpc("kc_admin_create_vendor", {
       p_vendor: input,
       p_expected_updated_at: expectedUpdatedAt,
@@ -133,9 +133,9 @@ export async function deleteInventoryItem(
   input: DeleteInventoryInput,
   expectedUpdatedAt: string,
 ): Promise<{ store: Store; updatedAt: string; deletedInventoryId: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
+  if (!adminSupabase) throw new Error("Supabase is not configured");
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .rpc("kc_admin_delete_inventory_item", {
       p_inventory_id: input.inventory_id,
       p_confirm_scan_code: input.confirm_scan_code,
@@ -160,9 +160,9 @@ export async function returnInventoryItem(
   input: ReturnInventoryInput,
   expectedUpdatedAt: string,
 ): Promise<{ store: Store; updatedAt: string; returnedInventoryId: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
+  if (!adminSupabase) throw new Error("Supabase is not configured");
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .rpc("kc_admin_return_inventory_item", {
       p_inventory_id: input.inventory_id,
       p_expected_updated_at: expectedUpdatedAt,
@@ -186,8 +186,8 @@ export async function updateInventoryItem(
   input: UpdateInventoryInput,
   expectedUpdatedAt: string,
 ): Promise<{ store: Store; updatedAt: string; updatedInventoryId: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
-  const { data, error } = await supabase
+  if (!adminSupabase) throw new Error("Supabase is not configured");
+  const { data, error } = await adminSupabase
     .rpc("kc_admin_update_inventory_item", {
       p_inventory_id: input.inventory_id,
       p_changes: input.changes,
@@ -206,8 +206,8 @@ export async function restoreInventoryItem(
   input: ReturnInventoryInput,
   expectedUpdatedAt: string,
 ): Promise<{ store: Store; updatedAt: string; restoredInventoryId: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
-  const { data, error } = await supabase
+  if (!adminSupabase) throw new Error("Supabase is not configured");
+  const { data, error } = await adminSupabase
     .rpc("kc_admin_restore_inventory_item", {
       p_inventory_id: input.inventory_id,
       p_expected_updated_at: expectedUpdatedAt,
@@ -224,9 +224,9 @@ export async function sellInventoryItem(
   input: SaleInput,
   expectedUpdatedAt: string,
 ): Promise<{ store: Store; updatedAt: string; saleId: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
+  if (!adminSupabase) throw new Error("Supabase is not configured");
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .rpc("kc_staff_sell_inventory_item", {
       p_inventory_id: input.inventory_id,
       p_sold_price: input.sold_price,
@@ -254,9 +254,9 @@ export async function savePosStore(
   expectedUpdatedAt: string,
   actionSummary = "POS 主資料更新",
 ): Promise<{ source: SyncSource; updatedAt: string }> {
-  if (!supabase) throw new Error("Supabase is not configured");
+  if (!adminSupabase) throw new Error("Supabase is not configured");
 
-  const { data, error } = await supabase
+  const { data, error } = await adminSupabase
     .rpc("kc_staff_save_pos_state", {
       p_payload: store,
       p_expected_updated_at: expectedUpdatedAt,

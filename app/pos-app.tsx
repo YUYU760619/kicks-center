@@ -38,7 +38,7 @@ import {
   type VendorInput,
 } from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
-import { supabase } from "@/lib/supabase";
+import { adminSupabase } from "@/lib/supabase";
 import {
   clearInboundDraft,
   loadInboundDraft,
@@ -2842,12 +2842,12 @@ function Settings({
           </p>
           <Btn
             onClick={async () => {
-              if (!supabase) {
+              if (!adminSupabase) {
                 notify("系統安全設定缺失，無法執行登入操作");
                 return;
               }
               clearSensitiveBrowserState();
-              await supabase.auth.signOut();
+              await adminSupabase.auth.signOut();
             }}
           >
             登出系統
@@ -2876,10 +2876,10 @@ function MemberAccessCard({
   useEffect(() => {
     let mounted = true;
     async function loadRole() {
-      if (!supabase) return;
-      const { data: userData } = await supabase.auth.getUser();
+      if (!adminSupabase) return;
+      const { data: userData } = await adminSupabase.auth.getUser();
       if (!userData.user) return;
-      const { data } = await supabase
+      const { data } = await adminSupabase
         .from("kc_app_members")
         .select("role")
         .eq("user_id", userData.user.id)
@@ -2894,9 +2894,9 @@ function MemberAccessCard({
 
   async function saveMember(event: FormEvent) {
     event.preventDefault();
-    if (!supabase || currentRole !== "admin") return;
+    if (!adminSupabase || currentRole !== "admin") return;
     setSaving(true);
-    const { error } = await supabase.rpc("kc_admin_set_member_access", {
+    const { error } = await adminSupabase.rpc("kc_admin_set_member_access", {
       p_email: email.trim(),
       p_role: role,
       p_vendor_id: role === "vendor" ? vendorId : null,

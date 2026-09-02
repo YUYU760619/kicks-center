@@ -18,8 +18,10 @@ assert.match(authGate, /if \(event\.persisted\) void revalidate\(\)/);
 assert.match(authGate, /window\.removeEventListener\("pageshow", handlePageShow\)/);
 assert.match(
   authGate,
-  /const visibleStatus = !supabase[\s\S]*validatedPortal === portal[\s\S]*\? status[\s\S]*: "checking"/,
+  /const visibleStatus = !portalSupabase[\s\S]*validatedPortal === portal[\s\S]*\? status[\s\S]*: "checking"/,
 );
+
+assert.match(authGate, /const portalSupabase = getPortalSupabase\(portal\)/);
 
 assert.match(authGate, /portal === "admin"[\s\S]*resolved\.role === "admin"/);
 assert.match(

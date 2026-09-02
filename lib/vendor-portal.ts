@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { vendorSupabase } from "@/lib/supabase";
 
 export type VendorPortalProduct = {
   id: string;
@@ -46,8 +46,8 @@ export type VendorPortalSnapshot = {
 };
 
 export async function loadVendorPortalSnapshot(): Promise<VendorPortalSnapshot> {
-  if (!supabase) throw new Error("Supabase is not configured");
-  const { data, error } = await supabase.rpc("kc_vendor_portal_snapshot");
+  if (!vendorSupabase) throw new Error("Supabase is not configured");
+  const { data, error } = await vendorSupabase.rpc("kc_vendor_portal_snapshot");
   if (error || !data) {
     console.error("Unable to load vendor portal", error);
     throw new Error("Unable to load vendor portal");

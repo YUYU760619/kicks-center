@@ -1,4 +1,4 @@
-import { supabase } from "@/lib/supabase";
+import { adminSupabase } from "@/lib/supabase";
 
 export type VendorAccountStatus = {
   linked: boolean;
@@ -25,8 +25,8 @@ export async function manageVendorAccount(input: {
   email?: string;
   password?: string;
 }): Promise<VendorAccountStatus> {
-  if (!supabase) throw new VendorAccountError("SUPABASE_NOT_CONFIGURED");
-  const { data, error } = await supabase.functions.invoke("kc-admin-vendor-account", {
+  if (!adminSupabase) throw new VendorAccountError("SUPABASE_NOT_CONFIGURED");
+  const { data, error } = await adminSupabase.functions.invoke("kc-admin-vendor-account", {
     body: input,
   });
   const payload = data as (VendorAccountStatus & { error?: string }) | null;

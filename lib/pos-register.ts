@@ -1,5 +1,5 @@
 import { normalizeScanCode } from "@/lib/pos-core";
-import { supabase } from "@/lib/supabase";
+import { staffSupabase } from "@/lib/supabase";
 
 export type PosInventoryItem = {
   inventory_id: string;
@@ -61,12 +61,12 @@ function registerError(error: RpcError) {
 }
 
 export async function lookupPosInventory(scanCode: string): Promise<PosInventoryItem | null> {
-  if (!supabase) throw new PosRegisterError("Supabase is not configured", "NOT_CONFIGURED");
+  if (!staffSupabase) throw new PosRegisterError("Supabase is not configured", "NOT_CONFIGURED");
 
   const normalizedCode = normalizeScanCode(scanCode);
   if (!normalizedCode) throw new PosRegisterError("SCAN_CODE_REQUIRED", "INVALID_SCAN_CODE");
 
-  const { data, error } = await supabase
+  const { data, error } = await staffSupabase
     .rpc("kc_pos_lookup_inventory", { p_scan_code: normalizedCode })
     .maybeSingle();
 
@@ -102,9 +102,9 @@ export async function completePosSale(input: {
   payment_method: string;
   discount: number;
 }): Promise<PosSaleReceipt> {
-  if (!supabase) throw new PosRegisterError("Supabase is not configured", "NOT_CONFIGURED");
+  if (!staffSupabase) throw new PosRegisterError("Supabase is not configured", "NOT_CONFIGURED");
 
-  const { data, error } = await supabase
+  const { data, error } = await staffSupabase
     .rpc("kc_pos_complete_sale", {
       p_inventory_id: input.inventory_id,
       p_sold_price: input.sold_price,
@@ -141,9 +141,9 @@ export async function completePosCartSale(input: {
   discount: number;
   payment_method: string;
 }): Promise<PosCartSaleReceipt> {
-  if (!supabase) throw new PosRegisterError("Supabase is not configured", "NOT_CONFIGURED");
+  if (!staffSupabase) throw new PosRegisterError("Supabase is not configured", "NOT_CONFIGURED");
 
-  const { data, error } = await supabase.rpc("kc_pos_complete_cart_sale", {
+  const { data, error } = await staffSupabase.rpc("kc_pos_complete_cart_sale", {
     p_items: input.items,
     p_discount: input.discount,
     p_payment_method: input.payment_method,

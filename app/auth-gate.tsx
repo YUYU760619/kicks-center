@@ -4,9 +4,8 @@ import type { Session } from "@supabase/supabase-js";
 import { FormEvent, ReactNode, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
-import { supabase } from "@/lib/supabase";
+import { getPortalSupabase, type AuthPortal } from "@/lib/supabase";
 
-type Portal = "admin" | "staff" | "vendor";
 type AuthStatus = "checking" | "signed-out" | "authorized" | "forbidden" | "misconfigured" | "error";
 type Member = {
   user_id: string;
@@ -15,10 +14,11 @@ type Member = {
   active: boolean;
 };
 
-export function AuthGate({ children, portal = "staff" }: { children: ReactNode; portal?: Portal }) {
-  const [status, setStatus] = useState<AuthStatus>(() => supabase ? "checking" : "misconfigured");
+export function AuthGate({ children, portal = "staff" }: { children: ReactNode; portal?: AuthPortal }) {
+  const portalSupabase = getPortalSupabase(portal);
+  const [status, setStatus] = useState<AuthStatus>(() => portalSupabase ? "checking" : "misconfigured");
   const [member, setMember] = useState<Member | null>(null);
-  const [validatedPortal, setValidatedPortal] = useState<Portal | null>(null);
+  const [validatedPortal, setValidatedPortal] = useState<AuthPortal | null>(null);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
@@ -26,7 +26,7 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
   const authorizationSequence = useRef(0);
 
   useEffect(() => {
-    if (!supabase) return;
+    if (!portalSupabase) return;
 
     let active = true;
     const beginAuthorization = () => {
@@ -49,7 +49,7 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
       }
 
       const sessionUserId = session.user.id;
-      const { data, error: memberError } = await supabase!
+      const { data, error: memberError } = await portalSupabase!
         .from("kc_app_members")
         .select("user_id, role, vendor_id, active")
         .eq("user_id", sessionUserId)
@@ -85,7 +85,7 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
 
     async function revalidate() {
       const requestId = beginAuthorization();
-      const { data, error: sessionError } = await supabase!.auth.getSession();
+      const { data, error: sessionError } = await portalSupabase!.auth.getSession();
       if (!active || requestId !== authorizationSequence.current) return;
       if (sessionError) {
         setMember(null);
@@ -96,7 +96,7 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
       await authorize(data.session, requestId);
     }
 
-    const { data } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data } = portalSupabase.auth.onAuthStateChange((_event, session) => {
       const requestId = beginAuthorization();
       void authorize(session, requestId);
     });
@@ -112,9 +112,9 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
       window.removeEventListener("pageshow", handlePageShow);
       data.subscription.unsubscribe();
     };
-  }, [portal]);
+  }, [portal, portalSupabase]);
 
-  const visibleStatus = !supabase
+  const visibleStatus = !portalSupabase
     ? "misconfigured"
     : validatedPortal === portal
       ? status
@@ -122,13 +122,13 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
 
   async function login(event: FormEvent) {
     event.preventDefault();
-    if (!supabase) {
+    if (!portalSupabase) {
       setStatus("misconfigured");
       return;
     }
     setSubmitting(true);
     setError("");
-    const { error: loginError } = await supabase.auth.signInWithPassword({
+    const { error: loginError } = await portalSupabase.auth.signInWithPassword({
       email: email.trim(),
       password,
     });
@@ -138,7 +138,7 @@ export function AuthGate({ children, portal = "staff" }: { children: ReactNode; 
 
   async function logout() {
     clearSensitiveBrowserState();
-    if (supabase) await supabase.auth.signOut();
+    if (portalSupabase) await portalSupabase.auth.signOut();
   }
 
   if (visibleStatus === "checking") {
