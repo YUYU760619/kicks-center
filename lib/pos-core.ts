@@ -109,6 +109,30 @@ export type ReturnInventoryInput = {
   inventory_id: string;
 };
 
+export type InventoryEditableFields = Pick<
+  Product,
+  | "category"
+  | "name"
+  | "brand"
+  | "model"
+  | "usSize"
+  | "cmSize"
+  | "color"
+  | "cost"
+  | "price"
+  | "vendorId"
+  | "packaging"
+  | "location"
+  | "consignmentStart"
+  | "note"
+>;
+
+export type UpdateInventoryInput = {
+  inventory_id: string;
+  changes: InventoryEditableFields & { scan_code?: string };
+  confirm_new_scan_code?: string;
+};
+
 export function normalizeScanCode(value: string) {
   return value.trim().toUpperCase();
 }
@@ -320,6 +344,118 @@ export function returnInventoryInStore(
       products: store.products.map((item) =>
         item.inventory_id === inventoryId ? returnedProduct : item,
       ),
+    },
+  };
+}
+
+function inventoryHasFinancialHistory(store: Store, inventoryId: string) {
+  const saleIds = new Set(
+    store.sales
+      .filter((sale) => sale.inventory_id === inventoryId)
+      .map((sale) => sale.sale_id),
+  );
+  return saleIds.size > 0 || store.settlements.some((settlement) =>
+    settlement.saleIds.some((saleId) => saleIds.has(saleId)),
+  );
+}
+
+export function updateInventoryInStore(
+  store: Store,
+  input: UpdateInventoryInput,
+  updatedAt: string,
+): { store: Store; product: Product } {
+  const inventoryId = input.inventory_id.trim();
+  const product = store.products.find((item) => item.inventory_id === inventoryId);
+  if (!product) throw new Error("INVENTORY_NOT_FOUND");
+
+  const fields = input.changes;
+  const required = [
+    fields.category,
+    fields.name,
+    fields.brand,
+    fields.model,
+    fields.usSize,
+    fields.cmSize,
+    fields.color,
+    fields.vendorId,
+    fields.packaging,
+    fields.location,
+    fields.consignmentStart,
+  ];
+  if (required.some((value) => !String(value).trim()))
+    throw new Error("INVENTORY_EDIT_REQUIRED_FIELD");
+  if (!Number.isFinite(fields.cost) || fields.cost < 0 || !Number.isFinite(fields.price) || fields.price < 0)
+    throw new Error("INVENTORY_EDIT_INVALID_PRICE");
+  if (!isCurrentVendorId(store.vendors, fields.vendorId))
+    throw new Error("VENDOR_NOT_FOUND");
+  if (
+    inventoryHasFinancialHistory(store, inventoryId) &&
+    (fields.vendorId !== product.vendorId || fields.cost !== product.cost)
+  ) throw new Error("INVENTORY_FINANCIAL_FIELDS_LOCKED");
+
+  let scanCode = product.scan_code;
+  if (fields.scan_code !== undefined) {
+    scanCode = normalizeScanCode(fields.scan_code);
+    if (!scanCode) throw new Error("SCAN_CODE_REQUIRED");
+    if (normalizeScanCode(input.confirm_new_scan_code || "") !== scanCode)
+      throw new Error("SCAN_CODE_CONFIRMATION_MISMATCH");
+    if (store.products.some((item) => item.inventory_id !== inventoryId && normalizeScanCode(item.scan_code) === scanCode))
+      throw new Error("SCAN_CODE_EXISTS");
+  }
+
+  const nextProduct: Product = {
+    ...product,
+    ...fields,
+    scan_code: scanCode,
+    code: scanCode,
+    inventory_id: product.inventory_id,
+    id: product.id,
+    status: product.status,
+    createdAt: product.createdAt,
+    history: [
+      ...product.history,
+      {
+        at: updatedAt,
+        action: fields.scan_code === undefined ? "商品資料修改" : "修改貨號",
+        note: fields.scan_code === undefined
+          ? "管理員更新商品詳細資料"
+          : `貨號 ${product.scan_code} → ${scanCode}；舊實體條碼失效`,
+      },
+    ],
+  };
+  return {
+    product: nextProduct,
+    store: {
+      ...store,
+      products: store.products.map((item) => item.inventory_id === inventoryId ? nextProduct : item),
+    },
+  };
+}
+
+export function restoreInventoryInStore(
+  store: Store,
+  input: ReturnInventoryInput,
+  restoredAt: string,
+): { store: Store; product: Product } {
+  const inventoryId = input.inventory_id.trim();
+  const product = store.products.find((item) => item.inventory_id === inventoryId);
+  if (!product) throw new Error("INVENTORY_NOT_FOUND");
+  if (product.status !== "已取回") throw new Error("INVENTORY_NOT_RETURNED");
+  if (inventoryHasFinancialHistory(store, inventoryId))
+    throw new Error("INVENTORY_HAS_FINANCIAL_HISTORY");
+  const nextProduct: Product = {
+    ...product,
+    status: "在庫",
+    history: [
+      ...product.history,
+      { at: restoredAt, action: "取消取回／恢復在庫", note: "管理員確認取消取回，商品恢復可售庫存" },
+    ],
+  };
+  return {
+    product: nextProduct,
+    store: {
+      ...store,
+      products: store.products.map((item) => item.inventory_id === inventoryId ? nextProduct : item),
     },
   };
 }

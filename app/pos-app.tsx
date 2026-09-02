@@ -9,8 +9,10 @@ import {
   PosOperationError,
   PosStoreConflictError,
   returnInventoryItem,
+  restoreInventoryItem,
   savePosStore,
   sellInventoryItem,
+  updateInventoryItem,
 } from "@/lib/pos-store";
 import {
   createInventoryInStore,
@@ -21,7 +23,10 @@ import {
   normalizeScanCode,
   normalizeVendorCode,
   returnInventoryInStore,
+  restoreInventoryInStore,
   sellInventoryInStore,
+  updateInventoryInStore,
+  type InventoryEditableFields,
   type InventoryInput,
   type Log,
   type Product,
@@ -456,6 +461,12 @@ type Ctx = {
   }) => Promise<Sale>;
   deleteInventory: (product: Product, confirmScanCode: string) => Promise<void>;
   returnInventory: (product: Product) => Promise<void>;
+  restoreInventory: (product: Product) => Promise<void>;
+  updateInventory: (
+    product: Product,
+    changes: InventoryEditableFields & { scan_code?: string },
+    confirmNewScanCode?: string,
+  ) => Promise<void>;
   go: (p: Page) => void;
   notify: (m: string) => void;
   vendor: (id: string) => Vendor | undefined;
@@ -712,6 +723,60 @@ export function PosApp({
       setSyncing(false);
     }
   };
+  const updateInventory = async (
+    product: Product,
+    changes: InventoryEditableFields & { scan_code?: string },
+    confirmNewScanCode?: string,
+  ) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        const result = updateInventoryInStore(store, {
+          inventory_id: product.inventory_id,
+          changes,
+          confirm_new_scan_code: confirmNewScanCode,
+        }, now());
+        setStore(result.store);
+      } else {
+        const expectedUpdatedAt = await prepareCoreMutation();
+        const result = await updateInventoryItem({
+          inventory_id: product.inventory_id,
+          changes,
+          confirm_new_scan_code: confirmNewScanCode,
+        }, expectedUpdatedAt);
+        applyCloudMutation(result.store, result.updatedAt);
+      }
+      notify(changes.scan_code === undefined ? "商品資料修改完成" : "商品貨號修改完成");
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
+  const restoreInventory = async (product: Product) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        const result = restoreInventoryInStore(store, { inventory_id: product.inventory_id }, now());
+        setStore(result.store);
+      } else {
+        const expectedUpdatedAt = await prepareCoreMutation();
+        const result = await restoreInventoryItem({ inventory_id: product.inventory_id }, expectedUpdatedAt);
+        applyCloudMutation(result.store, result.updatedAt);
+      }
+      notify(`商品 ${product.scan_code} 已恢復在庫`);
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
   const vendor = (id: string) => store.vendors.find((v) => v.id === id);
   const c = {
     store,
@@ -721,6 +786,8 @@ export function PosApp({
     completeSale,
     deleteInventory,
     returnInventory,
+    restoreInventory,
+    updateInventory,
     go,
     notify,
     vendor,
@@ -1060,6 +1127,8 @@ function Inventory({
   setStore,
   deleteInventory,
   returnInventory,
+  restoreInventory,
+  updateInventory,
   vendor,
   selected,
   setSelected,
@@ -1092,10 +1161,13 @@ function Inventory({
       <Detail
         p={p}
         vendor={vendor(p.vendorId)}
+        vendors={store.vendors}
         hasFinancialHistory={hasFinancialHistory}
         back={() => setSelected(null)}
         deleteInventory={deleteInventory}
         returnInventory={returnInventory}
+        restoreInventory={restoreInventory}
+        updateInventory={updateInventory}
         update={(patch, action, note) => {
           setStore((s) => ({
             ...s,
@@ -1212,22 +1284,53 @@ function Inventory({
 function Detail({
   p,
   vendor,
+  vendors,
   hasFinancialHistory,
   back,
   update,
   deleteInventory,
   returnInventory,
+  restoreInventory,
+  updateInventory,
 }: {
   p: Product;
   vendor?: Vendor;
+  vendors: Vendor[];
   hasFinancialHistory: boolean;
   back: () => void;
   update: (p: Partial<Product>, a: string, n: string) => void;
   deleteInventory: (product: Product, confirmScanCode: string) => Promise<void>;
   returnInventory: (product: Product) => Promise<void>;
+  restoreInventory: (product: Product) => Promise<void>;
+  updateInventory: (
+    product: Product,
+    changes: InventoryEditableFields & { scan_code?: string },
+    confirmNewScanCode?: string,
+  ) => Promise<void>;
 }) {
-  const [price, setPrice] = useState(String(p.price));
-  const [loc, setLoc] = useState(p.location);
+  const [edit, setEdit] = useState<InventoryEditableFields>(() => ({
+    category: p.category,
+    name: p.name,
+    brand: p.brand,
+    model: p.model,
+    usSize: p.usSize,
+    cmSize: p.cmSize,
+    color: p.color,
+    cost: p.cost,
+    price: p.price,
+    vendorId: p.vendorId,
+    packaging: p.packaging,
+    location: p.location,
+    consignmentStart: p.consignmentStart,
+    note: p.note,
+  }));
+  const [editError, setEditError] = useState("");
+  const [savingEdit, setSavingEdit] = useState(false);
+  const [scanStep, setScanStep] = useState<0 | 1 | 2>(0);
+  const [newScanCode, setNewScanCode] = useState("");
+  const [confirmNewScanCode, setConfirmNewScanCode] = useState("");
+  const [scanError, setScanError] = useState("");
+  const [savingScan, setSavingScan] = useState(false);
   const [deleteStep, setDeleteStep] = useState<0 | 1 | 2>(0);
   const [confirmScanCode, setConfirmScanCode] = useState("");
   const [deleteError, setDeleteError] = useState("");
@@ -1235,6 +1338,68 @@ function Detail({
   const [returnPending, setReturnPending] = useState(false);
   const [returnError, setReturnError] = useState("");
   const [returning, setReturning] = useState(false);
+  const [restorePending, setRestorePending] = useState(false);
+  const [restoreError, setRestoreError] = useState("");
+  const [restoring, setRestoring] = useState(false);
+  const setEditField = <K extends keyof InventoryEditableFields>(key: K, value: InventoryEditableFields[K]) =>
+    setEdit((current) => ({ ...current, [key]: value }));
+  const saveEdit = async () => {
+    if (savingEdit) return;
+    setSavingEdit(true);
+    setEditError("");
+    try {
+      await updateInventory(p, edit);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (error instanceof PosStoreConflictError) setEditError("資料已被其他工作站更新，請重新確認後再儲存");
+      else if (message.includes("INVENTORY_FINANCIAL_FIELDS_LOCKED")) setEditError("商品已有銷售／銷帳紀錄，不可修改寄賣廠商或回價");
+      else if (message.includes("VENDOR_NOT_FOUND")) setEditError("指定的寄賣廠商不存在");
+      else if (message.includes("REQUIRED_FIELD") || message.includes("INVALID_PRICE")) setEditError("請完整填寫欄位，回價與售價不得小於 0");
+      else setEditError("商品資料修改失敗，資料未變更");
+    } finally {
+      setSavingEdit(false);
+    }
+  };
+  const normalizedNewScanCode = normalizeScanCode(newScanCode);
+  const persistedEditableFields: InventoryEditableFields = {
+    category: p.category,
+    name: p.name,
+    brand: p.brand,
+    model: p.model,
+    usSize: p.usSize,
+    cmSize: p.cmSize,
+    color: p.color,
+    cost: p.cost,
+    price: p.price,
+    vendorId: p.vendorId,
+    packaging: p.packaging,
+    location: p.location,
+    consignmentStart: p.consignmentStart,
+    note: p.note,
+  };
+  const saveScanCode = async () => {
+    if (savingScan || normalizeScanCode(confirmNewScanCode) !== normalizedNewScanCode) return;
+    setSavingScan(true);
+    setScanError("");
+    try {
+      await updateInventory(
+        p,
+        { ...persistedEditableFields, scan_code: normalizedNewScanCode },
+        confirmNewScanCode,
+      );
+      setScanStep(0);
+      setNewScanCode("");
+      setConfirmNewScanCode("");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (error instanceof PosStoreConflictError) setScanError("資料已被其他工作站更新，請重新確認後再操作");
+      else if (message.includes("SCAN_CODE_EXISTS")) setScanError("新貨號已存在，不可重複使用");
+      else if (message.includes("SCAN_CODE_CONFIRMATION_MISMATCH")) setScanError("第二次輸入的新貨號不相符");
+      else setScanError("貨號修改失敗，舊貨號仍然有效");
+    } finally {
+      setSavingScan(false);
+    }
+  };
   const closeDeleteDialog = () => {
     if (deleting) return;
     setDeleteStep(0);
@@ -1301,6 +1466,23 @@ function Detail({
       setReturning(false);
     }
   };
+  const confirmRestore = async () => {
+    if (restoring) return;
+    setRestoring(true);
+    setRestoreError("");
+    try {
+      await restoreInventory(p);
+      setRestorePending(false);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "";
+      if (error instanceof PosStoreConflictError) setRestoreError("資料已被其他工作站更新，請重新確認後再操作");
+      else if (message.includes("INVENTORY_NOT_RETURNED")) setRestoreError("商品目前不是已取回狀態，無法恢復在庫");
+      else if (message.includes("INVENTORY_HAS_FINANCIAL_HISTORY")) setRestoreError("商品已有銷售／銷帳紀錄，無法恢復在庫");
+      else setRestoreError("恢復在庫失敗，資料未變更");
+    } finally {
+      setRestoring(false);
+    }
+  };
   return (
     <>
       <button onClick={back} className="mb-5 text-xs font-bold text-zinc-400">
@@ -1314,55 +1496,35 @@ function Detail({
       />
       <div className="grid gap-5 xl:grid-cols-[1fr_400px]">
         <div className="kc-card p-5">
-          <div className="grid gap-5 sm:grid-cols-2 lg:grid-cols-3">
-            {[
-              ["分類", p.category],
-              ["US / CM 尺寸", `${p.usSize} / ${p.cmSize} cm`],
-              ["顏色", p.color],
-              ["回價", money(p.cost)],
-              ["寄賣廠商", vendor?.name || "-"],
-              ["包裝狀態", p.packaging],
-              ["寄賣開始", p.consignmentStart],
-              ["備註", p.note || "無"],
-            ].map(([a, b]) => (
-              <div key={a}>
-                <div className="text-[10px] font-bold text-zinc-600">{a}</div>
-                <div className="mt-2 text-sm font-semibold">{b}</div>
-              </div>
-            ))}
-          </div>
-          <hr className="my-6 border-[#303944]" />
-          <div className="grid gap-3 sm:grid-cols-2">
-            <label>
-              <span className="kc-label">目前售價</span>
-              <input
-                className="kc-input"
-                type="number"
-                value={price}
-                onChange={(e) => setPrice(e.target.value)}
-              />
-            </label>
-            <label>
-              <span className="kc-label">庫存位置</span>
-              <input
-                className="kc-input"
-                value={loc}
-                onChange={(e) => setLoc(e.target.value)}
-              />
-            </label>
-          </div>
-          <div className="mt-4 flex flex-wrap gap-2">
-            <Btn
-              onClick={() =>
-                update(
-                  { price: Number(price), location: loc },
-                  "商品資料修改",
-                  `售價 ${money(Number(price))}，位置 ${loc}`,
-                )
-              }
-            >
-              儲存修改
+          <div className="mb-5 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="text-sm font-black">商品詳細資料</div>
+              <div className="mt-1 font-mono text-[10px] text-zinc-600">inventory_id：{p.inventory_id}</div>
+            </div>
+            <Btn variant="ghost" onClick={() => { setScanStep(1); setNewScanCode(p.scan_code); setScanError(""); }}>
+              修改貨號
             </Btn>
+          </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+            <label><span className="kc-label">分類</span><select className="kc-input" value={edit.category} onChange={(e) => setEditField("category", e.target.value)}><option>鞋款</option><option>服飾</option><option>配件</option></select></label>
+            <label><span className="kc-label">商品名稱</span><input className="kc-input" value={edit.name} onChange={(e) => setEditField("name", e.target.value)} /></label>
+            <label><span className="kc-label">品牌</span><input className="kc-input" value={edit.brand} onChange={(e) => setEditField("brand", e.target.value)} /></label>
+            <label><span className="kc-label">型號</span><input className="kc-input" value={edit.model} onChange={(e) => setEditField("model", e.target.value)} /></label>
+            <label><span className="kc-label">US 尺寸</span><input className="kc-input" value={edit.usSize} onChange={(e) => setEditField("usSize", e.target.value)} /></label>
+            <label><span className="kc-label">CM 尺寸</span><input className="kc-input" value={edit.cmSize} onChange={(e) => setEditField("cmSize", e.target.value)} /></label>
+            <label><span className="kc-label">顏色</span><input className="kc-input" value={edit.color} onChange={(e) => setEditField("color", e.target.value)} /></label>
+            <label><span className="kc-label">回價</span><input className="kc-input" type="number" min="0" value={edit.cost} disabled={hasFinancialHistory} onChange={(e) => setEditField("cost", Number(e.target.value))} /></label>
+            <label><span className="kc-label">售價</span><input className="kc-input" type="number" min="0" value={edit.price} onChange={(e) => setEditField("price", Number(e.target.value))} /></label>
+            <label><span className="kc-label">寄賣廠商</span><select className="kc-input" value={edit.vendorId} disabled={hasFinancialHistory} onChange={(e) => setEditField("vendorId", e.target.value)}>{vendors.map((item) => <option value={item.id} key={item.id}>{item.code} · {item.name}</option>)}</select></label>
+            <label><span className="kc-label">包裝狀態</span><input className="kc-input" value={edit.packaging} onChange={(e) => setEditField("packaging", e.target.value)} /></label>
+            <label><span className="kc-label">庫存位置</span><input className="kc-input" value={edit.location} onChange={(e) => setEditField("location", e.target.value)} /></label>
+            <label><span className="kc-label">寄賣開始日</span><input className="kc-input" type="date" value={edit.consignmentStart} onChange={(e) => setEditField("consignmentStart", e.target.value)} /></label>
+          </div>
+          <label className="mt-3 block"><span className="kc-label">備註</span><textarea className="kc-input min-h-20" value={edit.note} onChange={(e) => setEditField("note", e.target.value)} /></label>
+          {hasFinancialHistory && <p className="mt-3 text-[11px] font-bold text-[#e0b85f]">此商品已有財務歷史，寄賣廠商與回價已鎖定。</p>}
+          {editError && <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-bold text-red-400">{editError}</div>}
+          <div className="mt-4 flex flex-wrap gap-2">
+            <Btn disabled={savingEdit} onClick={() => void saveEdit()}>{savingEdit ? "安全儲存中…" : "儲存修改"}</Btn>
             {p.status === "在庫" && (
               <>
                 <Btn
@@ -1391,6 +1553,11 @@ function Detail({
                   下架
                 </Btn>
               </>
+            )}
+            {p.status === "已取回" && (
+              <Btn variant="ghost" onClick={() => { setRestorePending(true); setRestoreError(""); }}>
+                恢復在庫
+              </Btn>
             )}
           </div>
           <div className="mt-8 border-t border-[#d96c6c]/20 pt-6">
@@ -1585,6 +1752,51 @@ function Detail({
                 {returning ? "確認中…" : "確認取回"}
               </Btn>
             </div>
+          </section>
+        </div>
+      )}
+      {scanStep > 0 && (
+        <div className="fixed inset-0 z-[80] grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="scan-code-edit-title" className="w-full max-w-[580px] rounded-3xl border border-[#d9a441]/35 bg-[#1d232b] p-6 shadow-2xl sm:p-8">
+            <div className="text-[10px] font-black uppercase tracking-[.18em] text-[#e0b85f]">{scanStep === 1 ? "第一次確認" : "第二次確認"}</div>
+            <h2 id="scan-code-edit-title" className="mt-2 text-xl font-black">修改貨號／QR CODE</h2>
+            <div className="mt-5 rounded-2xl border border-[#d9a441]/25 bg-[#d9a441]/10 p-4 text-xs font-bold leading-6 text-[#e0b85f]">
+              修改後舊實體條碼將立即失效，POS 只能使用新貨號搜尋。
+            </div>
+            <dl className="mt-5 grid gap-3 rounded-2xl bg-[#171c22] p-4 sm:grid-cols-2">
+              <div><dt className="text-[9px] text-zinc-600">目前貨號</dt><dd className="mt-1 font-mono text-xs font-bold">{p.scan_code}</dd></div>
+              <div><dt className="text-[9px] text-zinc-600">inventory_id</dt><dd className="mt-1 break-all font-mono text-xs font-bold">{p.inventory_id}</dd></div>
+            </dl>
+            {scanStep === 1 ? (
+              <>
+                <label className="mt-5 block"><span className="kc-label">新貨號</span><input autoFocus className="kc-input mt-2 font-mono uppercase" value={newScanCode} onChange={(e) => { setNewScanCode(e.target.value); setScanError(""); }} /></label>
+                <p className="mt-2 text-[10px] text-zinc-500">只會移除前後空白並轉成大寫；中間空白、連字號與補零格式全部保留。</p>
+                <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end">
+                  <Btn variant="ghost" onClick={() => setScanStep(0)}>取消</Btn>
+                  <Btn disabled={!normalizedNewScanCode || normalizedNewScanCode === p.scan_code} onClick={() => { setNewScanCode(normalizedNewScanCode); setConfirmNewScanCode(""); setScanStep(2); }}>確認新貨號，繼續</Btn>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mt-5 grid gap-3 rounded-2xl border border-[#303944] p-4 sm:grid-cols-2"><div><div className="text-[9px] text-zinc-600">舊貨號</div><div className="mt-1 font-mono text-xs font-bold">{p.scan_code}</div></div><div><div className="text-[9px] text-zinc-600">新貨號</div><div className="mt-1 font-mono text-xs font-bold text-[#e0b85f]">{normalizedNewScanCode}</div></div></div>
+                <label className="mt-5 block"><span className="kc-label">再次輸入完整新貨號</span><input autoFocus className="kc-input mt-2 font-mono uppercase" value={confirmNewScanCode} onChange={(e) => { setConfirmNewScanCode(e.target.value); setScanError(""); }} autoComplete="off" /></label>
+                {confirmNewScanCode && normalizeScanCode(confirmNewScanCode) !== normalizedNewScanCode && <p className="mt-2 text-[11px] font-bold text-red-400">完整新貨號尚未吻合</p>}
+                {scanError && <div className="mt-4 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-bold text-red-400">{scanError}</div>}
+                <div className="mt-6 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><Btn variant="ghost" disabled={savingScan} onClick={() => setScanStep(1)}>上一步</Btn><Btn disabled={savingScan || normalizeScanCode(confirmNewScanCode) !== normalizedNewScanCode} onClick={() => void saveScanCode()}>{savingScan ? "安全修改中…" : "確認修改貨號"}</Btn></div>
+              </>
+            )}
+          </section>
+        </div>
+      )}
+      {restorePending && (
+        <div className="fixed inset-0 z-[75] grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
+          <section role="dialog" aria-modal="true" aria-labelledby="restore-inventory-title" className="w-full max-w-[560px] rounded-3xl border border-[#5daa83]/35 bg-[#1d232b] p-6 shadow-2xl sm:p-8">
+            <div className="text-[10px] font-black uppercase tracking-[.18em] text-[#74bb96]">第二次確認</div>
+            <h2 id="restore-inventory-title" className="mt-2 text-xl font-black">確認恢復在庫</h2>
+            <p className="mt-3 text-xs leading-5 text-zinc-500">目前尚未修改資料。確認後商品才會恢復為在庫，原取回歷史會保留並新增恢復紀錄。</p>
+            <div className="mt-6 grid gap-4 rounded-2xl bg-[#171c22] p-5 sm:grid-cols-2">{[["貨號",p.scan_code],["商品名稱",p.name],["目前狀態",p.status],["寄賣廠商",vendor?.name || "-"]].map(([label,value]) => <div key={label}><div className="text-[9px] font-bold text-zinc-600">{label}</div><div className="mt-1 text-xs font-bold">{value}</div></div>)}</div>
+            {restoreError && <div className="mt-5 rounded-xl border border-red-500/20 bg-red-500/10 p-3 text-xs font-bold text-red-400">{restoreError}</div>}
+            <div className="mt-7 flex flex-col-reverse gap-3 sm:flex-row sm:justify-end"><Btn variant="ghost" disabled={restoring} onClick={() => { setRestorePending(false); setRestoreError(""); }}>取消</Btn><Btn disabled={restoring} onClick={() => void confirmRestore()}>{restoring ? "確認中…" : "確認恢復在庫"}</Btn></div>
           </section>
         </div>
       )}

@@ -3,6 +3,7 @@ import {
   type DeleteInventoryInput,
   type InventoryInput,
   type ReturnInventoryInput,
+  type UpdateInventoryInput,
   type SaleInput,
   type Store,
   type VendorInput,
@@ -64,6 +65,8 @@ type MutationRow = {
   sale_id?: string;
   deleted_inventory_id?: string;
   returned_inventory_id?: string;
+  restored_inventory_id?: string;
+  updated_inventory_id?: string;
   vendor_id?: string;
 };
 
@@ -177,6 +180,44 @@ export async function returnInventoryItem(
     updatedAt: row.updated_at,
     returnedInventoryId: row.returned_inventory_id,
   };
+}
+
+export async function updateInventoryItem(
+  input: UpdateInventoryInput,
+  expectedUpdatedAt: string,
+): Promise<{ store: Store; updatedAt: string; updatedInventoryId: string }> {
+  if (!supabase) throw new Error("Supabase is not configured");
+  const { data, error } = await supabase
+    .rpc("kc_admin_update_inventory_item", {
+      p_inventory_id: input.inventory_id,
+      p_changes: input.changes,
+      p_confirm_new_scan_code: input.confirm_new_scan_code ?? null,
+      p_expected_updated_at: expectedUpdatedAt,
+    })
+    .single();
+  if (error) throw operationError(error);
+  const row = data as MutationRow | null;
+  if (!row?.payload || !row.updated_at || !row.updated_inventory_id)
+    throw new PosOperationError("Inventory update returned incomplete data", "INVALID_RESPONSE");
+  return { store: normalizeStoreSchema(row.payload), updatedAt: row.updated_at, updatedInventoryId: row.updated_inventory_id };
+}
+
+export async function restoreInventoryItem(
+  input: ReturnInventoryInput,
+  expectedUpdatedAt: string,
+): Promise<{ store: Store; updatedAt: string; restoredInventoryId: string }> {
+  if (!supabase) throw new Error("Supabase is not configured");
+  const { data, error } = await supabase
+    .rpc("kc_admin_restore_inventory_item", {
+      p_inventory_id: input.inventory_id,
+      p_expected_updated_at: expectedUpdatedAt,
+    })
+    .single();
+  if (error) throw operationError(error);
+  const row = data as MutationRow | null;
+  if (!row?.payload || !row.updated_at || !row.restored_inventory_id)
+    throw new PosOperationError("Inventory restore returned incomplete data", "INVALID_RESPONSE");
+  return { store: normalizeStoreSchema(row.payload), updatedAt: row.updated_at, restoredInventoryId: row.restored_inventory_id };
 }
 
 export async function sellInventoryItem(
