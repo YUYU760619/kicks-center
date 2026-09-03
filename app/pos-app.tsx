@@ -40,6 +40,7 @@ import {
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { adminSupabase } from "@/lib/supabase";
 import { KcAiAssistant } from "@/app/kc-ai-assistant";
+import { useAdminUi } from "@/app/admin-ui-context";
 import {
   clearInboundDraft,
   loadInboundDraft,
@@ -2226,9 +2227,13 @@ function POS({ store, completeSale, notify }: Ctx) {
 }
 
 function Vendors({ store, createVendor, notify }: Ctx) {
-  const emptyForm = { code: "", name: "", phone: "", joined: "" };
-  const [showCreate, setShowCreate] = useState(false);
-  const [form, setForm] = useState(emptyForm);
+  const {
+    createVendorOpen,
+    setCreateVendorOpen,
+    createVendorDraft: form,
+    setCreateVendorDraft: setForm,
+    clearCreateVendor,
+  } = useAdminUi();
   const [formError, setFormError] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const normalizedCode = normalizeVendorCode(form.code);
@@ -2236,8 +2241,7 @@ function Vendors({ store, createVendor, notify }: Ctx) {
     (vendor) => normalizeVendorCode(vendor.code) === normalizedCode,
   );
   const resetCreate = () => {
-    setShowCreate(false);
-    setForm(emptyForm);
+    clearCreateVendor();
     setFormError("");
   };
   const closeCreate = () => {
@@ -2292,7 +2296,7 @@ function Vendors({ store, createVendor, notify }: Ctx) {
         eyebrow="Consignors"
         title="寄賣廠商"
         desc="每位寄賣廠商都有獨立管理頁面，不再以 Excel Sheet 分散管理"
-        action={<Btn onClick={() => setShowCreate(true)}>＋ 新增寄賣廠商</Btn>}
+        action={<Btn onClick={() => setCreateVendorOpen(true)}>＋ 新增寄賣廠商</Btn>}
       />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {store.vendors.map((v) => {
@@ -2355,7 +2359,7 @@ function Vendors({ store, createVendor, notify }: Ctx) {
           尚無寄賣廠商，請使用右上角按鈕建立第一位寄賣廠商
         </div>
       )}
-      {showCreate && (
+      {createVendorOpen && (
         <div className="fixed inset-0 z-[70] grid place-items-center bg-black/80 p-4 backdrop-blur-sm">
           <form
             onSubmit={submitCreate}

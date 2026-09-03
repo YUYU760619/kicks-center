@@ -9,7 +9,8 @@ const context = readFileSync(path.join(root, "app/kc-ai-context.tsx"), "utf8");
 const assistant = readFileSync(path.join(root, "app/kc-ai-assistant.tsx"), "utf8");
 const posApp = readFileSync(path.join(root, "app/pos-app.tsx"), "utf8");
 
-assert.match(layout, /<KcAiProvider>\{children\}<\/KcAiProvider>/);
+assert.match(layout, /<KcAiProvider>/);
+assert.match(layout, /<KcAiProvider>[\s\S]*<AdminUiProvider>\{children\}<\/AdminUiProvider>[\s\S]*<\/KcAiProvider>/);
 assert.match(context, /const \[open, setOpen\] = useState\(false\)/);
 assert.match(context, /const \[messages, setMessages\] = useState<KcAiChatMessage\[]>\(\[\]\)/);
 assert.match(context, /<KcAiContext\.Provider/);
