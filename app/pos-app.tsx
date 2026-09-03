@@ -1139,6 +1139,7 @@ function Inventory({
   selected,
   setSelected,
   notify,
+  go,
 }: Ctx) {
   const [q, setQ] = useState("");
   const [status, setStatus] = useState("全部狀態");
@@ -1198,6 +1199,7 @@ function Inventory({
         eyebrow="Inventory"
         title="庫存管理"
         desc={`管理店內所有寄賣商品，目前共 ${store.products.length} 筆資料`}
+        action={<Btn variant="ghost" onClick={() => go("dashboard")}>← 返回首頁</Btn>}
       />
       <div className="kc-card mb-4 grid gap-3 p-4 md:grid-cols-[1fr_180px_180px]">
         <input
@@ -2322,17 +2324,21 @@ function Vendors({ store, createVendor, notify }: Ctx) {
               href={`/vendors/${v.id}`}
               className="kc-card p-5 text-left transition hover:-translate-y-0.5 hover:border-orange-500/40"
             >
-              <div className="flex items-center gap-3">
-                <div className="grid h-11 w-11 place-items-center rounded-xl bg-orange-500/10 font-black text-orange-400">
-                  {v.name.slice(0, 2)}
-                </div>
-                <div className="min-w-0">
-                  <div className="truncate font-mono text-[11px] font-black text-[#e8893a]">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="truncate font-mono text-sm font-black text-[#e8893a]">
                     {vendorCodes.map((code) => code.code).join(" / ")}
                   </div>
-                  <div className="mt-1 truncate text-lg font-black text-white">{v.name}</div>
-                  <div className="mt-1 truncate text-[10px] text-zinc-500">
-                    {v.phone || "未提供電話"}
+                  <div className="mt-3 flex items-center gap-3">
+                    <div className="grid h-11 w-11 shrink-0 place-items-center rounded-xl bg-orange-500/10 font-black text-orange-400">
+                      {v.name.slice(0, 2)}
+                    </div>
+                    <div className="min-w-0">
+                      <div className="truncate text-xl font-black text-white">{v.name}</div>
+                      <div className="mt-1 truncate text-[11px] text-zinc-500">
+                        {v.phone || "未提供電話"}
+                      </div>
+                    </div>
                   </div>
                 </div>
                 <span className="ml-auto text-[10px] font-bold text-zinc-500">

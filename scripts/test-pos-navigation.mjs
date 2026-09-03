@@ -32,5 +32,7 @@ assert.match(posApp, /buildAdminPageUrl\(window\.location\.href, p\)/);
 assert.match(posApp, /window\.addEventListener\("popstate", syncPageFromUrl\)/);
 assert.match(posApp, /window\.removeEventListener\("popstate", syncPageFromUrl\)/);
 assert.match(posApp, /setPage\(readAdminPage\(window\.location\.search\)\)/);
+assert.match(posApp, /action={<Btn variant="ghost" onClick={\(\) => go\("dashboard"\)}>← 返回首頁<\/Btn>}/);
+assert.match(posApp, /function Inventory\([\s\S]*?go,[\s\S]*?}: Ctx\)/);
 
-console.log("POS navigation regression passed: URL-synced views survive remount and invalid pages fall back safely");
+console.log("POS navigation regression passed: URL-synced views survive remount, inventory has a responsive home action, and invalid pages fall back safely");

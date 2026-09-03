@@ -69,7 +69,17 @@ assert.match(detail, /設為主要/);
 assert.match(detail, /主要代號不可直接停用/);
 assert.match(detail, /VENDOR_CODE_KIND_LABELS/);
 assert.match(list, /vendorCodes\.map\(\(code\) => code\.code\)\.join\(" \/ "\)/);
-assert.match(list, /text-lg font-black text-white/);
+const vendorCodesPosition = list.indexOf('{vendorCodes.map((code) => code.code).join(" / ")}');
+const vendorNamePosition = list.indexOf('{v.name}</div>', vendorCodesPosition);
+const vendorPhonePosition = list.indexOf('{v.phone || "未提供電話"}', vendorNamePosition);
+assert.ok(vendorCodesPosition >= 0 && vendorCodesPosition < vendorNamePosition, "active codes must render above the vendor name");
+assert.ok(vendorNamePosition < vendorPhonePosition, "phone must render below the vendor name on its own line");
+assert.match(list, /text-xl font-black text-white/);
+assert.match(list, /text-sm font-black text-\[#e8893a\]/);
+assert.match(list, /v\.phone \|\| "未提供電話"/);
+for (const preservedLabel of ["目前寄賣", "已售未結", "累計銷售", "待結款", "獨立頁面 →"]) {
+  assert.ok(list.includes(preservedLabel), `${preservedLabel} must remain on the vendor card`);
+}
 assert.match(migration, /'footwear_accessory', 'apparel', 'chrome_hearts'/);
 assert.match(migration, /VENDOR_CODE_REMOVAL_FORBIDDEN/);
 assert.match(migration, /VENDOR_CODE_INACTIVE/);
