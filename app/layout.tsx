@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import './globals.css';
 import { IdleCat } from './idle-cat';
+import { KcAiProvider } from './kc-ai-context';
 
 export const metadata: Metadata = {
   title: 'KICKS CENTER · POS System',
@@ -15,7 +16,7 @@ export default function RootLayout({
   return (
     <html lang="zh-Hant">
       <body>
-        {children}
+        <KcAiProvider>{children}</KcAiProvider>
         <IdleCat />
       </body>
     </html>

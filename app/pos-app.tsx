@@ -39,6 +39,7 @@ import {
 } from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { adminSupabase } from "@/lib/supabase";
+import { KcAiAssistant } from "@/app/kc-ai-assistant";
 import {
   clearInboundDraft,
   loadInboundDraft,
@@ -920,6 +921,7 @@ export function PosApp({
           ✓ {toast}
         </div>
       )}
+      <KcAiAssistant />
     </div>
   );
 }
