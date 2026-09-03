@@ -1,5 +1,7 @@
 import {
   normalizeStoreSchema,
+  getPrimaryVendorCode,
+  getVendorCodes,
   type DeleteInventoryInput,
   type InventoryInput,
   type ReturnInventoryInput,
@@ -7,6 +9,7 @@ import {
   type SaleInput,
   type Store,
   type VendorInput,
+  type VendorCode,
 } from "@/lib/pos-core";
 import { clearSensitiveBrowserState } from "@/lib/security-storage";
 import { adminSupabase } from "@/lib/supabase";
@@ -96,8 +99,24 @@ export async function createInventoryItem(
     throw new PosOperationError("Inventory creation returned incomplete data", "INVALID_RESPONSE");
   }
 
+  const store = normalizeStoreSchema(row.payload);
+  // The DB guard persists the authoritative snapshot. The legacy inventory
+  // RPC returns its pre-trigger local payload, so mirror that resolved value
+  // in the immediate Admin response without changing legacy load behavior.
+  const product = store.products.find((item) => item.inventory_id === row.inventory_id);
+  const vendor = store.vendors.find((item) => item.id === product?.vendorId);
+  if (product && vendor && !product.vendorCodeId) {
+    const code = input.vendorCodeId
+      ? getVendorCodes(vendor).find((entry) => entry.id === input.vendorCodeId)
+      : getPrimaryVendorCode(vendor);
+    if (code) {
+      product.vendorCodeId = code.id;
+      product.vendorCode = code.code;
+      product.vendorCodeKind = code.kind;
+    }
+  }
   return {
-    store: normalizeStoreSchema(row.payload),
+    store,
     updatedAt: row.updated_at,
     inventoryId: row.inventory_id,
   };
@@ -126,6 +145,54 @@ export async function createVendorItem(
     store: normalizeStoreSchema(row.payload),
     updatedAt: row.updated_at,
     vendorId: row.vendor_id,
+  };
+}
+
+export async function setVendorCodes(
+  vendorId: string,
+  codes: Array<Omit<VendorCode, "id"> & { id?: string }>,
+  expectedUpdatedAt: string,
+): Promise<{ store: Store; updatedAt: string; vendorId: string }> {
+  if (!adminSupabase) throw new Error("Supabase is not configured");
+  const { data, error } = await adminSupabase
+    .rpc("kc_admin_set_vendor_codes", {
+      p_vendor_id: vendorId,
+      p_codes: codes,
+      p_expected_updated_at: expectedUpdatedAt,
+    })
+    .single();
+  if (error) throw operationError(error);
+  const row = data as MutationRow | null;
+  if (!row?.payload || !row.updated_at || !row.vendor_id)
+    throw new PosOperationError("Vendor code update returned incomplete data", "INVALID_RESPONSE");
+  return {
+    store: normalizeStoreSchema(row.payload),
+    updatedAt: row.updated_at,
+    vendorId: row.vendor_id,
+  };
+}
+
+export async function setInventoryVendorCode(
+  inventoryId: string,
+  vendorCodeId: string,
+  expectedUpdatedAt: string,
+): Promise<{ store: Store; updatedAt: string; updatedInventoryId: string }> {
+  if (!adminSupabase) throw new Error("Supabase is not configured");
+  const { data, error } = await adminSupabase
+    .rpc("kc_admin_set_inventory_vendor_code", {
+      p_inventory_id: inventoryId,
+      p_vendor_code_id: vendorCodeId,
+      p_expected_updated_at: expectedUpdatedAt,
+    })
+    .single();
+  if (error) throw operationError(error);
+  const row = data as MutationRow | null;
+  if (!row?.payload || !row.updated_at || !row.updated_inventory_id)
+    throw new PosOperationError("Inventory vendor code update returned incomplete data", "INVALID_RESPONSE");
+  return {
+    store: normalizeStoreSchema(row.payload),
+    updatedAt: row.updated_at,
+    updatedInventoryId: row.updated_inventory_id,
   };
 }
 

@@ -4,6 +4,7 @@ import { createContext, type ReactNode, useContext, useState } from "react";
 
 export type CreateVendorDraft = {
   code: string;
+  codeKind: "footwear_accessory" | "apparel" | "chrome_hearts";
   name: string;
   phone: string;
   joined: string;
@@ -11,6 +12,7 @@ export type CreateVendorDraft = {
 
 const emptyCreateVendorDraft: CreateVendorDraft = {
   code: "",
+  codeKind: "footwear_accessory",
   name: "",
   phone: "",
   joined: "",

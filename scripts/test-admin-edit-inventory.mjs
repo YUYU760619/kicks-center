@@ -14,12 +14,12 @@ const product = {
 };
 const other = { ...product, inventory_id: "inv-2", id: "inv-2", scan_code: "OTHER-01", code: "OTHER-01" };
 const base = { products: [product, other], vendors: [
-  { id: "v1", code: "V001", name: "Vendor 1", phone: "", joined: "2026-01-01" },
-  { id: "v2", code: "V002", name: "Vendor 2", phone: "", joined: "2026-01-01" },
+  { id: "v1", code: "V001", codes: [{ id: "vc1", code: "V001", kind: "footwear_accessory", primary: true, active: true }], name: "Vendor 1", phone: "", joined: "2026-01-01" },
+  { id: "v2", code: "V002", codes: [{ id: "vc2", code: "V002", kind: "apparel", primary: true, active: true }], name: "Vendor 2", phone: "", joined: "2026-01-01" },
 ], sales: [], settlements: [] };
 const changes = {
   category: "服飾", name: "Updated", brand: "Jordan", model: "M2", usSize: "10",
-  cmSize: "28", color: "White", cost: 1200, price: 2300, vendorId: "v2",
+  cmSize: "28", color: "White", cost: 1200, price: 2300, vendorId: "v2", vendorCodeId: "vc2",
   packaging: "袋裝", location: "B-02", consignmentStart: "2026-09-02", note: "edited",
 };
 
@@ -57,13 +57,14 @@ assert.throws(() => updateInventoryInStore(soldStore, {
   inventory_id: "inv-1", changes,
 }, "2026-09-02T03:00:00Z"), /INVENTORY_FINANCIAL_FIELDS_LOCKED/);
 const typoFix = updateInventoryInStore(soldStore, {
-  inventory_id: "inv-1", changes: { ...changes, cost: 1000, vendorId: "v1" },
+  inventory_id: "inv-1", changes: { ...changes, cost: 1000, vendorId: "v1", vendorCodeId: undefined },
 }, "2026-09-02T03:00:00Z");
 assert.equal(typoFix.product.name, "Updated");
 assert.equal(typoFix.store.sales, soldStore.sales, "sales must never be rewritten");
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const sql = readFileSync(path.join(root, "supabase/migrations/202609010012_admin_inventory_edit_and_restore.sql"), "utf8");
+const multiCodeSql = readFileSync(path.join(root, "supabase/migrations/202609030013_vendor_multi_code_stage1.sql"), "utf8");
 assert.match(sql, /create or replace function public\.kc_admin_update_inventory_item\(/);
 assert.match(sql, /if not private\.kc_is_admin\(\)/);
 assert.match(sql, /for update;/i);
@@ -77,5 +78,8 @@ assert.match(sql, /revoke all on function public\.kc_admin_update_inventory_item
 assert.match(sql, /perform private\.kc_assert_pos_financial_integrity/);
 assert.match(sql, /perform private\.kc_assert_stage1_core/);
 assert.match(sql, /perform set_config\([\s\S]*kc\.action_summary/);
+assert.match(multiCodeSql, /'vendorId','vendorCodeId'/);
+assert.match(multiCodeSql, /VENDOR_CODE_REQUIRED_FOR_VENDOR_CHANGE/);
+assert.match(multiCodeSql, /private\.kc_resolve_vendor_code\(v_payload, v_vendor_id, v_vendor_code_id\)/);
 
 console.log("Admin inventory edit PASS: atomic whitelist, immutable IDs/status/history, scan confirmation/uniqueness, financial locks, audit contract");

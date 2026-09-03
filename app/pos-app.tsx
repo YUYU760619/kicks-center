@@ -19,6 +19,7 @@ import {
   createVendorInStore,
   deleteInventoryFromStore,
   getInitialInboundVendorId,
+  getVendorCodes,
   isCurrentVendorId,
   normalizeScanCode,
   normalizeVendorCode,
@@ -26,6 +27,8 @@ import {
   restoreInventoryInStore,
   sellInventoryInStore,
   updateInventoryInStore,
+  VENDOR_CODE_KIND_LABELS,
+  VENDOR_CODE_KINDS,
   type InventoryEditableFields,
   type InventoryInput,
   type Log,
@@ -1322,6 +1325,7 @@ function Detail({
     cost: p.cost,
     price: p.price,
     vendorId: p.vendorId,
+    vendorCodeId: p.vendorCodeId,
     packaging: p.packaging,
     location: p.location,
     consignmentStart: p.consignmentStart,
@@ -1375,6 +1379,7 @@ function Detail({
     cost: p.cost,
     price: p.price,
     vendorId: p.vendorId,
+    vendorCodeId: p.vendorCodeId,
     packaging: p.packaging,
     location: p.location,
     consignmentStart: p.consignmentStart,
@@ -1486,6 +1491,10 @@ function Detail({
       setRestoring(false);
     }
   };
+  const editableVendor = vendors.find((item) => item.id === edit.vendorId) ?? vendor;
+  const editableVendorCodes = editableVendor
+    ? getVendorCodes(editableVendor).filter((code) => code.active)
+    : [];
   return (
     <>
       <button onClick={back} className="mb-5 text-xs font-bold text-zinc-400">
@@ -1518,7 +1527,8 @@ function Detail({
             <label><span className="kc-label">顏色</span><input className="kc-input" value={edit.color} onChange={(e) => setEditField("color", e.target.value)} /></label>
             <label><span className="kc-label">回價</span><input className="kc-input" type="number" min="0" value={edit.cost} disabled={hasFinancialHistory} onChange={(e) => setEditField("cost", Number(e.target.value))} /></label>
             <label><span className="kc-label">售價</span><input className="kc-input" type="number" min="0" value={edit.price} onChange={(e) => setEditField("price", Number(e.target.value))} /></label>
-            <label><span className="kc-label">寄賣廠商</span><select className="kc-input" value={edit.vendorId} disabled={hasFinancialHistory} onChange={(e) => setEditField("vendorId", e.target.value)}>{vendors.map((item) => <option value={item.id} key={item.id}>{item.code} · {item.name}</option>)}</select></label>
+            <label><span className="kc-label">寄賣廠商</span><select className="kc-input" value={edit.vendorId} disabled={hasFinancialHistory} onChange={(e) => { const nextVendor = vendors.find((item) => item.id === e.target.value); const primary = nextVendor && getVendorCodes(nextVendor).find((code) => code.primary && code.active); setEdit((current) => ({ ...current, vendorId: e.target.value, vendorCodeId: primary?.id })); }}>{vendors.map((item) => <option value={item.id} key={item.id}>{item.code} · {item.name}</option>)}</select></label>
+            <label><span className="kc-label">廠商代號</span><select className="kc-input" value={edit.vendorCodeId ?? editableVendorCodes.find((code) => code.primary)?.id ?? ""} disabled={hasFinancialHistory} onChange={(e) => setEditField("vendorCodeId", e.target.value)}>{editableVendorCodes.map((code) => <option value={code.id} key={code.id}>{code.code} · {VENDOR_CODE_KIND_LABELS[code.kind]}</option>)}</select></label>
             <label><span className="kc-label">包裝狀態</span><input className="kc-input" value={edit.packaging} onChange={(e) => setEditField("packaging", e.target.value)} /></label>
             <label><span className="kc-label">庫存位置</span><input className="kc-input" value={edit.location} onChange={(e) => setEditField("location", e.target.value)} /></label>
             <label><span className="kc-label">寄賣開始日</span><input className="kc-input" type="date" value={edit.consignmentStart} onChange={(e) => setEditField("consignmentStart", e.target.value)} /></label>
@@ -2260,6 +2270,7 @@ function Vendors({ store, createVendor, notify }: Ctx) {
     try {
       const vendor = await createVendor({
         code: normalizedCode,
+        codeKind: form.codeKind,
         name,
         phone: form.phone.trim(),
         joined: form.joined,
@@ -2300,6 +2311,7 @@ function Vendors({ store, createVendor, notify }: Ctx) {
       />
       <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
         {store.vendors.map((v) => {
+          const vendorCodes = getVendorCodes(v).filter((code) => code.active);
           const ps = store.products.filter((p) => p.vendorId === v.id);
           const ss = store.sales.filter((s) =>
             ps.some((p) => p.id === s.productId),
@@ -2314,10 +2326,13 @@ function Vendors({ store, createVendor, notify }: Ctx) {
                 <div className="grid h-11 w-11 place-items-center rounded-xl bg-orange-500/10 font-black text-orange-400">
                   {v.name.slice(0, 2)}
                 </div>
-                <div>
-                  <div className="text-sm font-black">{v.name}</div>
-                  <div className="mt-1 text-[10px] text-zinc-600">
-                    {v.code} · {v.phone}
+                <div className="min-w-0">
+                  <div className="truncate font-mono text-[11px] font-black text-[#e8893a]">
+                    {vendorCodes.map((code) => code.code).join(" / ")}
+                  </div>
+                  <div className="mt-1 truncate text-lg font-black text-white">{v.name}</div>
+                  <div className="mt-1 truncate text-[10px] text-zinc-500">
+                    {v.phone || "未提供電話"}
                   </div>
                 </div>
                 <span className="ml-auto text-[10px] font-bold text-zinc-500">
@@ -2426,6 +2441,21 @@ function Vendors({ store, createVendor, notify }: Ctx) {
                   }}
                   placeholder="例：路易"
                 />
+              </label>
+              <label>
+                <span className="kc-label">主要代號分類 *</span>
+                <select
+                  className="kc-input"
+                  value={form.codeKind}
+                  onChange={(event) => setForm((current) => ({
+                    ...current,
+                    codeKind: event.target.value as keyof typeof VENDOR_CODE_KIND_LABELS,
+                  }))}
+                >
+                  {VENDOR_CODE_KINDS.map((kind) => (
+                    <option key={kind} value={kind}>{VENDOR_CODE_KIND_LABELS[kind]}</option>
+                  ))}
+                </select>
               </label>
               <label>
                 <span className="kc-label">聯絡電話</span>

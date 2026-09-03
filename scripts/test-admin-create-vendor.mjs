@@ -86,6 +86,7 @@ const baseStore = {
 };
 const input = {
   code: " kc-new-001 ",
+  codeKind: "footwear_accessory",
   name: " 新廠商 ",
   phone: " 0912-000-001 ",
   joined: "",

@@ -8,9 +8,33 @@ export type Status =
 
 export type SettlementStatus = "pending" | "deferred" | "settled";
 
+export const VENDOR_CODE_KINDS = [
+  "footwear_accessory",
+  "apparel",
+  "chrome_hearts",
+] as const;
+
+export type VendorCodeKind = (typeof VENDOR_CODE_KINDS)[number];
+
+export const VENDOR_CODE_KIND_LABELS: Record<VendorCodeKind, string> = {
+  footwear_accessory: "鞋子／配件",
+  apparel: "服飾",
+  chrome_hearts: "克羅心",
+};
+
+export type VendorCode = {
+  id: string;
+  code: string;
+  kind: VendorCodeKind;
+  primary: boolean;
+  active: boolean;
+};
+
 export type Vendor = {
   id: string;
   code: string;
+  /** Optional for legacy vendors. Use getVendorCodes() when reading. */
+  codes?: VendorCode[];
   name: string;
   phone: string;
   joined: string;
@@ -35,6 +59,9 @@ export type Product = {
   cost: number;
   price: number;
   vendorId: string;
+  vendorCodeId?: string;
+  vendorCode?: string;
+  vendorCodeKind?: VendorCodeKind;
   location: string;
   consignmentStart: string;
   /** Legacy compatibility only. New inventory ends by sale/return/delist event. */
@@ -54,6 +81,9 @@ export type Sale = {
   sold_price: number;
   return_price: number;
   vendor_id: string;
+  vendor_code_id?: string;
+  vendor_code?: string;
+  vendor_code_kind?: VendorCodeKind;
   payment_method: string;
   settlement_status: SettlementStatus;
   /** Compatibility aliases for existing screens. */
@@ -88,10 +118,14 @@ export type Store = {
 
 export type InventoryInput = Omit<
   Product,
-  "inventory_id" | "scan_code" | "id" | "code" | "status" | "createdAt" | "history"
-> & { scan_code: string };
+  | "inventory_id" | "scan_code" | "id" | "code" | "status" | "createdAt" | "history"
+  | "vendorCode" | "vendorCodeKind"
+> & { scan_code: string; vendorCodeId?: string };
 
-export type VendorInput = Omit<Vendor, "id">;
+export type VendorInput = Omit<Vendor, "id" | "codes"> & {
+  /** Explicit primary-code classification for newly created vendors. */
+  codeKind: VendorCodeKind;
+};
 
 export type SaleInput = {
   inventory_id: string;
@@ -125,7 +159,7 @@ export type InventoryEditableFields = Pick<
   | "location"
   | "consignmentStart"
   | "note"
->;
+> & { vendorCodeId?: string };
 
 export type UpdateInventoryInput = {
   inventory_id: string;
@@ -152,6 +186,75 @@ export function normalizeVendorCode(value: string) {
   return value.trim().toUpperCase();
 }
 
+export const LEGACY_VENDOR_CODE_KIND: VendorCodeKind = "footwear_accessory";
+
+export function getVendorCodes(vendor: Vendor): VendorCode[] {
+  if (Array.isArray(vendor.codes) && vendor.codes.length > 0) {
+    return vendor.codes.map((entry) => ({
+      ...entry,
+      code: normalizeVendorCode(entry.code),
+    }));
+  }
+  return [{
+    id: vendor.id,
+    code: normalizeVendorCode(vendor.code),
+    // Legacy compatibility policy: old vendors had no classification field.
+    // Their single primary code uses one fixed default, never a code pattern.
+    kind: LEGACY_VENDOR_CODE_KIND,
+    primary: true,
+    active: true,
+  }];
+}
+
+export function getPrimaryVendorCode(vendor: Vendor): VendorCode {
+  return getVendorCodes(vendor).find((entry) => entry.primary) ?? getVendorCodes(vendor)[0];
+}
+
+export function getProductVendorCode(product: Product, vendor: Vendor): VendorCode {
+  const codes = getVendorCodes(vendor);
+  const selected = codes.find((entry) => entry.id === product.vendorCodeId)
+    ?? codes.find((entry) => entry.code === normalizeVendorCode(product.vendorCode || ""))
+    ?? getPrimaryVendorCode(vendor);
+  return {
+    ...selected,
+    code: product.vendorCode ? normalizeVendorCode(product.vendorCode) : selected.code,
+    kind: product.vendorCodeKind ?? selected.kind,
+  };
+}
+
+export function getSaleVendorCode(sale: Sale, product: Product, vendor: Vendor): VendorCode {
+  const productCode = getProductVendorCode(product, vendor);
+  return {
+    ...productCode,
+    id: sale.vendor_code_id || productCode.id,
+    code: sale.vendor_code ? normalizeVendorCode(sale.vendor_code) : productCode.code,
+    kind: sale.vendor_code_kind ?? productCode.kind,
+  };
+}
+
+export function assertVendorCodesIntegrity(vendors: Vendor[]) {
+  const usedCodes = new Set<string>();
+  const usedIds = new Set<string>();
+  for (const vendor of vendors) {
+    const codes = getVendorCodes(vendor);
+    const primary = codes.filter((entry) => entry.primary);
+    if (primary.length !== 1) throw new Error("VENDOR_PRIMARY_CODE_INVALID");
+    if (normalizeVendorCode(vendor.code) !== primary[0].code)
+      throw new Error("VENDOR_PRIMARY_CODE_MISMATCH");
+    for (const entry of codes) {
+      if (!entry.id || !entry.code) throw new Error("VENDOR_CODE_INVALID");
+      if (!VENDOR_CODE_KINDS.includes(entry.kind))
+        throw new Error("VENDOR_CODE_KIND_INVALID");
+      if (entry.primary && !entry.active)
+        throw new Error("VENDOR_PRIMARY_CODE_INACTIVE");
+      if (usedIds.has(entry.id)) throw new Error("VENDOR_CODE_ID_EXISTS");
+      if (usedCodes.has(entry.code)) throw new Error("VENDOR_CODE_EXISTS");
+      usedIds.add(entry.id);
+      usedCodes.add(entry.code);
+    }
+  }
+}
+
 export function createVendorInStore(
   store: Store,
   input: VendorInput,
@@ -164,6 +267,8 @@ export function createVendorInStore(
   if (!id) throw new Error("VENDOR_ID_REQUIRED");
   if (!code) throw new Error("VENDOR_CODE_REQUIRED");
   if (!name) throw new Error("VENDOR_NAME_REQUIRED");
+  if (!VENDOR_CODE_KINDS.includes(input.codeKind))
+    throw new Error("VENDOR_CODE_KIND_INVALID");
   if (store.vendors.some((vendor) => vendor.id === id))
     throw new Error("VENDOR_ID_EXISTS");
   if (
@@ -176,6 +281,13 @@ export function createVendorInStore(
   const vendor: Vendor = {
     id,
     code,
+    codes: [{
+      id,
+      code,
+      kind: input.codeKind,
+      primary: true,
+      active: true,
+    }],
     name,
     phone: input.phone.trim(),
     joined: input.joined.trim() || createdOn,
@@ -249,6 +361,13 @@ export function createInventoryInStore(
   if (store.products.some((product) => normalizeScanCode(product.scan_code) === scanCode)) {
     throw new Error("SCAN_CODE_EXISTS");
   }
+  const vendor = store.vendors.find((item) => item.id === input.vendorId);
+  if (!vendor) throw new Error("VENDOR_NOT_FOUND");
+  const vendorCodes = getVendorCodes(vendor);
+  const selectedVendorCode = input.vendorCodeId
+    ? vendorCodes.find((entry) => entry.id === input.vendorCodeId && entry.active)
+    : getPrimaryVendorCode(vendor);
+  if (!selectedVendorCode) throw new Error("VENDOR_CODE_NOT_FOUND");
 
   const product: Product = {
     ...input,
@@ -256,6 +375,9 @@ export function createInventoryInStore(
     scan_code: scanCode,
     id: inventoryId,
     code: scanCode,
+    vendorCodeId: selectedVendorCode.id,
+    vendorCode: selectedVendorCode.code,
+    vendorCodeKind: selectedVendorCode.kind,
     status: "在庫",
     createdAt,
     history: [
@@ -388,9 +510,22 @@ export function updateInventoryInStore(
     throw new Error("INVENTORY_EDIT_INVALID_PRICE");
   if (!isCurrentVendorId(store.vendors, fields.vendorId))
     throw new Error("VENDOR_NOT_FOUND");
+  const selectedVendor = store.vendors.find((vendor) => vendor.id === fields.vendorId)!;
+  const vendorChanged = fields.vendorId !== product.vendorId;
+  const codeChanged = fields.vendorCodeId !== undefined
+    && fields.vendorCodeId !== product.vendorCodeId;
+  if (vendorChanged && !fields.vendorCodeId)
+    throw new Error("VENDOR_CODE_REQUIRED_FOR_VENDOR_CHANGE");
+  const selectedCode = fields.vendorCodeId
+    ? getVendorCodes(selectedVendor).find((entry) => entry.id === fields.vendorCodeId && entry.active)
+    : fields.vendorId === product.vendorId
+      ? getProductVendorCode(product, selectedVendor)
+      : getPrimaryVendorCode(selectedVendor);
+  if (!selectedCode) throw new Error("VENDOR_CODE_NOT_FOUND");
   if (
     inventoryHasFinancialHistory(store, inventoryId) &&
-    (fields.vendorId !== product.vendorId || fields.cost !== product.cost)
+    (vendorChanged || fields.cost !== product.cost
+      || selectedCode.id !== getProductVendorCode(product, selectedVendor).id)
   ) throw new Error("INVENTORY_FINANCIAL_FIELDS_LOCKED");
 
   let scanCode = product.scan_code;
@@ -406,6 +541,11 @@ export function updateInventoryInStore(
   const nextProduct: Product = {
     ...product,
     ...fields,
+    ...(vendorChanged || codeChanged ? {
+      vendorCodeId: selectedCode.id,
+      vendorCode: selectedCode.code,
+      vendorCodeKind: selectedCode.kind,
+    } : {}),
     scan_code: scanCode,
     code: scanCode,
     inventory_id: product.inventory_id,
@@ -423,6 +563,11 @@ export function updateInventoryInStore(
       },
     ],
   };
+  if (!vendorChanged && !codeChanged && !product.vendorCodeId) {
+    delete nextProduct.vendorCodeId;
+    delete nextProduct.vendorCode;
+    delete nextProduct.vendorCodeKind;
+  }
   return {
     product: nextProduct,
     store: {
@@ -477,6 +622,9 @@ export function sellInventoryInStore(
   if (!Number.isFinite(input.sold_price) || input.sold_price <= 0) {
     throw new Error("INVALID_SALE_PRICE");
   }
+  const vendor = store.vendors.find((item) => item.id === product.vendorId);
+  if (!vendor) throw new Error("VENDOR_NOT_FOUND");
+  const vendorCode = getProductVendorCode(product, vendor);
 
   const sale: Sale = {
     sale_id: saleId,
@@ -485,6 +633,9 @@ export function sellInventoryInStore(
     sold_price: input.sold_price,
     return_price: product.cost,
     vendor_id: product.vendorId,
+    vendor_code_id: vendorCode.id,
+    vendor_code: vendorCode.code,
+    vendor_code_kind: vendorCode.kind,
     payment_method: input.payment_method,
     settlement_status: "pending",
     id: saleId,
