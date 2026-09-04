@@ -1,3 +1,4 @@
+import { adminSupabase } from "@/lib/supabase";
 import { vendorSupabase } from "@/lib/supabase";
 
 export type VendorPortalProduct = {
@@ -51,6 +52,20 @@ export async function loadVendorPortalSnapshot(): Promise<VendorPortalSnapshot> 
   if (error || !data) {
     console.error("Unable to load vendor portal", error);
     throw new Error("Unable to load vendor portal");
+  }
+  return data as VendorPortalSnapshot;
+}
+
+export async function loadAdminVendorPreview(vendorId: string): Promise<VendorPortalSnapshot> {
+  if (!adminSupabase) throw new Error("Supabase is not configured");
+  const normalizedVendorId = vendorId.trim();
+  if (!normalizedVendorId) throw new Error("Vendor ID is required");
+  const { data, error } = await adminSupabase.rpc("kc_admin_get_vendor_preview", {
+    p_vendor_id: normalizedVendorId,
+  });
+  if (error || !data) {
+    console.error("Unable to load admin vendor preview", error);
+    throw new Error("Unable to load admin vendor preview");
   }
   return data as VendorPortalSnapshot;
 }

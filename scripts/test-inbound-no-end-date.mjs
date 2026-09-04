@@ -7,7 +7,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const page = readFileSync(path.join(root, "app/pos-app.tsx"), "utf8");
 const core = readFileSync(path.join(root, "lib/pos-core.ts"), "utf8");
 const draft = readFileSync(path.join(root, "lib/inbound-draft.ts"), "utf8");
-const vendorPortal = readFileSync(path.join(root, "app/vendor-portal.tsx"), "utf8");
+const vendorPortal = readFileSync(path.join(root, "app/vendor-portal-view.tsx"), "utf8");
 const vendorDetail = readFileSync(path.join(root, "app/vendor-detail-page.tsx"), "utf8");
 const inventoryMigration = readFileSync(
   path.join(root, "supabase/migrations/202608300008_atomic_cart_checkout.sql"),

@@ -27,6 +27,7 @@
     "test:inbound-draft": "node --experimental-strip-types scripts/test-inbound-draft.mjs",
     "test:inbound-no-end-date": "node scripts/test-inbound-no-end-date.mjs",
     "test:vendor-account-isolation": "node scripts/test-vendor-account-isolation.mjs",
+    "test:admin-vendor-preview": "node scripts/test-admin-vendor-preview.mjs",
     "test:vendor-multi-code-stage1": "node --experimental-strip-types scripts/test-vendor-multi-code-stage1.mjs",
     "test:vendor-code-management": "node --experimental-strip-types scripts/test-vendor-code-management.mjs",
     "test:vendor-multi-code-stage16": "node --experimental-strip-types scripts/test-vendor-multi-code-stage16.mjs",
