@@ -12,20 +12,17 @@ export type VendorPortalProduct = {
   cmSize: string;
   color: string;
   cost: number;
-  price: number;
   status: string;
   packaging: string;
   consignmentStart: string;
   consignmentEnd?: string;
   createdAt: string;
-  history: Array<{ at: string; action: string; note: string }>;
 };
 
 export type VendorPortalSale = {
   id: string;
   productId: string;
   cost: number;
-  price: number;
   soldAt: string;
   settled: boolean;
   settlementId?: string;
@@ -35,7 +32,6 @@ export type VendorPortalSettlement = {
   id: string;
   saleIds: string[];
   payout: number;
-  totalSales: number;
   completedAt: string;
 };
 
