@@ -97,6 +97,8 @@ export type Sale = {
   discount: number;
   settled: boolean;
   settlementId?: string;
+  /** Canonical Vendor Portal publication control. Legacy missing values normalize to true. */
+  vendorVisible: boolean;
 };
 
 export type Settlement = {
@@ -344,6 +346,8 @@ export function normalizeStoreSchema(rawStore: Store): Store {
       cost: returnPrice,
       payment: paymentMethod,
       settled: settlementStatus === "settled",
+      vendorVisible:
+        typeof legacy.vendorVisible === "boolean" ? legacy.vendorVisible : true,
     };
   });
 
@@ -647,6 +651,7 @@ export function sellInventoryInStore(
     payment: input.payment_method,
     discount: input.discount,
     settled: false,
+    vendorVisible: true,
   };
 
   const nextProducts = store.products.map((item) =>

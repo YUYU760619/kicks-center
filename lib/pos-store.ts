@@ -71,6 +71,7 @@ type MutationRow = {
   restored_inventory_id?: string;
   updated_inventory_id?: string;
   vendor_id?: string;
+  vendor_visible?: boolean;
 };
 
 function operationError(error: { code?: string; message: string }) {
@@ -313,6 +314,34 @@ export async function sellInventoryItem(
     store: normalizeStoreSchema(row.payload),
     updatedAt: row.updated_at,
     saleId: row.sale_id,
+  };
+}
+
+export async function setSaleVendorVisibility(
+  saleId: string,
+  vendorVisible: boolean,
+  expectedUpdatedAt: string,
+): Promise<{ store: Store; updatedAt: string; saleId: string; vendorVisible: boolean }> {
+  if (!adminSupabase) throw new Error("Supabase is not configured");
+
+  const { data, error } = await adminSupabase
+    .rpc("kc_admin_set_sale_vendor_visibility", {
+      p_sale_id: saleId,
+      p_vendor_visible: vendorVisible,
+      p_expected_updated_at: expectedUpdatedAt,
+    })
+    .single();
+
+  if (error) throw operationError(error);
+  const row = data as MutationRow | null;
+  if (!row?.payload || !row.updated_at || !row.sale_id || typeof row.vendor_visible !== "boolean") {
+    throw new PosOperationError("Sale visibility update returned incomplete data", "INVALID_RESPONSE");
+  }
+  return {
+    store: normalizeStoreSchema(row.payload),
+    updatedAt: row.updated_at,
+    saleId: row.sale_id,
+    vendorVisible: row.vendor_visible,
   };
 }
 

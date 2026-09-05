@@ -11,6 +11,7 @@ import {
   returnInventoryItem,
   restoreInventoryItem,
   savePosStore,
+  setSaleVendorVisibility,
   sellInventoryItem,
   updateInventoryItem,
 } from "@/lib/pos-store";
@@ -369,6 +370,7 @@ const initial: Store = {
       payment: "信用卡",
       discount: 300,
       settled: false,
+      vendorVisible: true,
     },
   ],
   settlements: [],
@@ -464,6 +466,7 @@ type Ctx = {
     payment_method: string;
     discount: number;
   }) => Promise<Sale>;
+  updateSaleVendorVisibility: (sale: Sale, vendorVisible: boolean) => Promise<void>;
   deleteInventory: (product: Product, confirmScanCode: string) => Promise<void>;
   returnInventory: (product: Product) => Promise<void>;
   restoreInventory: (product: Product) => Promise<void>;
@@ -666,6 +669,35 @@ export function PosApp({
       setSyncing(false);
     }
   };
+  const updateSaleVendorVisibility = async (sale: Sale, vendorVisible: boolean) => {
+    if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
+    coreMutationLockRef.current = true;
+    setSyncing(true);
+    try {
+      if (preview) {
+        setStore((current) => ({
+          ...current,
+          sales: current.sales.map((item) =>
+            item.sale_id === sale.sale_id ? { ...item, vendorVisible } : item,
+          ),
+        }));
+        return;
+      }
+      const expectedUpdatedAt = await prepareCoreMutation();
+      const result = await setSaleVendorVisibility(
+        sale.sale_id,
+        vendorVisible,
+        expectedUpdatedAt,
+      );
+      applyCloudMutation(result.store, result.updatedAt);
+      notify(vendorVisible ? "供應商已可看到此筆售出" : "供應商端將此商品顯示為在庫");
+    } catch (error) {
+      return recoverCoreMutation(error);
+    } finally {
+      coreMutationLockRef.current = false;
+      setSyncing(false);
+    }
+  };
   const deleteInventory = async (product: Product, confirmScanCode: string) => {
     if (coreMutationLockRef.current) throw new Error("OPERATION_IN_PROGRESS");
     coreMutationLockRef.current = true;
@@ -789,6 +821,7 @@ export function PosApp({
     createInventory,
     createVendor,
     completeSale,
+    updateSaleVendorVisibility,
     deleteInventory,
     returnInventory,
     restoreInventory,
@@ -2750,9 +2783,23 @@ function Settle({ store, setStore, vendor, notify }: Ctx) {
   );
 }
 
-function Sales({ store, vendor }: Ctx) {
+function Sales({ store, vendor, updateSaleVendorVisibility, notify }: Ctx) {
   const [q, setQ] = useState("");
   const [day, setDay] = useState("");
+  const [visibilitySaving, setVisibilitySaving] = useState<string | null>(null);
+  const toggleVisibility = async (sale: Sale) => {
+    if (visibilitySaving) return;
+    setVisibilitySaving(sale.sale_id);
+    try {
+      await updateSaleVendorVisibility(sale, !sale.vendorVisible);
+    } catch (error) {
+      if (error instanceof PosStoreConflictError) notify("資料已被其他工作站更新，請重新確認後再操作");
+      else if (error instanceof PosOperationError && error.code === "42501") notify("只有啟用中的管理員可以修改供應商可見性");
+      else notify("供應商可見性更新失敗，資料未變更");
+    } finally {
+      setVisibilitySaving(null);
+    }
+  };
   const list = store.sales.filter((s) => {
     const p = store.products.find((x) => x.id === s.productId)!;
     return (
@@ -2798,6 +2845,7 @@ function Sales({ store, vendor }: Ctx) {
                 "付款方式",
                 "寄賣廠商",
                 "銷帳",
+                "供應商可見",
               ].map((x) => (
                 <th key={x}>{x}</th>
               ))}
@@ -2823,6 +2871,22 @@ function Sales({ store, vendor }: Ctx) {
                     className={s.settlement_status === "settled" ? "text-blue-400" : "text-orange-400"}
                   >
                     {s.settlement_status === "settled" ? "已銷帳" : "待銷帳"}
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={s.vendorVisible}
+                      disabled={visibilitySaving !== null}
+                      title={s.vendorVisible ? "供應商可看到真實售出狀態" : "供應商端仍顯示此商品為在庫"}
+                      onClick={() => void toggleVisibility(s)}
+                      className={`min-w-20 rounded-full border px-3 py-1.5 text-[10px] font-black ${s.vendorVisible ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-400" : "border-zinc-500/30 bg-zinc-500/10 text-zinc-400"}`}
+                    >
+                      {visibilitySaving === s.sale_id ? "儲存中…" : s.vendorVisible ? "ON 可見" : "OFF 隱藏"}
+                    </button>
+                    <div className="mt-1 max-w-28 text-[9px] leading-4 text-zinc-600">
+                      {s.vendorVisible ? "顯示真實售出狀態" : "供應商端顯示在庫"}
+                    </div>
                   </td>
                 </tr>
               );
